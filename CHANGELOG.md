@@ -1,3 +1,20 @@
+## [v2.5.0] - Unreleased
+
+### Added
+- Integrated X11/VNC desktop installer, lifecycle controls, and bundled noVNC client from canuk.
+- Kitty keyboard progressive-enhancement negotiation and CSI-u key events.
+- Integrated Termux:API receiver, native bridge sources, verified per-ABI packages, and built-in device actions.
+
+### Fixed
+- Release APK metadata now comes from the release tag. `v2.5.0` builds as `versionName=2.5.0` and `versionCode=20500999`, so Obtainium and Android agree on the installed update.
+- Debug-signed APK workflows can no longer attach assets to production releases.
+
+### Security
+- X11/VNC is loopback-only and its WebView blocks external resources and navigation.
+- Termux:API uses an unexported receiver, same-UID sockets, and SHA-256-verified bundled packages.
+
+---
+
 ## [2026-01-27] Build #228
 
 ### Changes

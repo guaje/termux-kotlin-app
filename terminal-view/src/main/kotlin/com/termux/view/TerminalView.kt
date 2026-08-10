@@ -359,7 +359,7 @@ class TerminalView(context: Context, attributes: AttributeSet?) : View(context, 
                         }
                     }
 
-                    inputCodePoint(KEY_EVENT_SOURCE_SOFT_KEYBOARD, codePoint, ctrlHeld, false)
+                    inputCodePoint(KEY_EVENT_SOURCE_SOFT_KEYBOARD, codePoint, ctrlHeld, false, false)
                     i++
                 }
             }
@@ -616,7 +616,8 @@ class TerminalView(context: Context, attributes: AttributeSet?) : View(context, 
         if (shiftDown) keyMod = keyMod or KeyHandler.KEYMOD_SHIFT
         if (event.isNumLockOn) keyMod = keyMod or KeyHandler.KEYMOD_NUM_LOCK
         // https://github.com/termux/termux-app/issues/731
-        if (!event.isFunctionPressed && handleKeyCode(keyCode, keyMod)) {
+        val kittyEventType = if (event.repeatCount > 0) 2 else 1
+        if (!event.isFunctionPressed && handleKeyCode(keyCode, keyMod, kittyEventType)) {
             if (TERMINAL_VIEW_KEY_LOGGING_ENABLED) mClient!!.logInfo(LOG_TAG, "handleKeyCode() took key event")
             return true
         }
@@ -645,7 +646,7 @@ class TerminalView(context: Context, attributes: AttributeSet?) : View(context, 
         if ((result and KeyCharacterMap.COMBINING_ACCENT) != 0) {
             // If entered combining accent previously, write it out:
             if (mCombiningAccent != 0)
-                inputCodePoint(event.deviceId, mCombiningAccent, controlDown, leftAltDown)
+                inputCodePoint(event.deviceId, mCombiningAccent, controlDown, leftAltDown, shiftDown, kittyEventType)
             mCombiningAccent = result and KeyCharacterMap.COMBINING_ACCENT_MASK
         } else {
             if (mCombiningAccent != 0) {
@@ -653,7 +654,7 @@ class TerminalView(context: Context, attributes: AttributeSet?) : View(context, 
                 if (combinedChar > 0) result = combinedChar
                 mCombiningAccent = 0
             }
-            inputCodePoint(event.deviceId, result, controlDown, leftAltDown)
+            inputCodePoint(event.deviceId, result, controlDown, leftAltDown, shiftDown, kittyEventType)
         }
 
         if (mCombiningAccent != oldCombiningAccent) invalidate()
@@ -662,6 +663,17 @@ class TerminalView(context: Context, attributes: AttributeSet?) : View(context, 
     }
 
     fun inputCodePoint(eventSource: Int, codePoint: Int, controlDownFromEvent: Boolean, leftAltDownFromEvent: Boolean) {
+        inputCodePoint(eventSource, codePoint, controlDownFromEvent, leftAltDownFromEvent, false)
+    }
+
+    fun inputCodePoint(
+        eventSource: Int,
+        codePoint: Int,
+        controlDownFromEvent: Boolean,
+        leftAltDownFromEvent: Boolean,
+        shiftDownFromEvent: Boolean,
+        kittyEventType: Int = 1
+    ) {
         var cp = codePoint
         if (TERMINAL_VIEW_KEY_LOGGING_ENABLED) {
             mClient!!.logInfo(LOG_TAG, "inputCodePoint(eventSource=$eventSource, codePoint=$cp, controlDownFromEvent=$controlDownFromEvent, leftAltDownFromEvent=$leftAltDownFromEvent)")
@@ -674,8 +686,23 @@ class TerminalView(context: Context, attributes: AttributeSet?) : View(context, 
 
         val controlDown = controlDownFromEvent || mClient!!.readControlKey()
         val altDown = leftAltDownFromEvent || mClient!!.readAltKey()
+        val shiftDown = shiftDownFromEvent || mClient!!.readShiftKey()
 
         if (mClient!!.onCodePoint(cp, controlDown, mTermSession!!)) return
+
+        // When kitty keyboard protocol is active, send CSI-u for printable chars too
+        val kittyFlags = mEmulator?.getKittyKeyboardFlags() ?: 0
+        if (kittyFlags != 0 && cp > 31 && Character.isValidCodePoint(cp)) {
+            var kittyMod = 0
+            if (shiftDown) kittyMod = kittyMod or KeyHandler.KEYMOD_SHIFT
+            if (altDown) kittyMod = kittyMod or KeyHandler.KEYMOD_ALT
+            if (controlDown) kittyMod = kittyMod or KeyHandler.KEYMOD_CTRL
+            val kittyCode = KeyHandler.getKittyKeyCode(0, kittyMod, kittyFlags, cp, kittyEventType)
+            if (kittyCode != null) {
+                mTermSession!!.write(kittyCode)
+                return
+            }
+        }
 
         if (controlDown) {
             cp = when {
@@ -711,7 +738,7 @@ class TerminalView(context: Context, attributes: AttributeSet?) : View(context, 
     }
 
     /** Input the specified keyCode if applicable and return if the input was consumed. */
-    fun handleKeyCode(keyCode: Int, keyMod: Int): Boolean {
+    fun handleKeyCode(keyCode: Int, keyMod: Int, kittyEventType: Int = 1): Boolean {
         // Ensure cursor is shown when a key is pressed down like long hold on (arrow) keys
         mEmulator?.setCursorBlinkState(true)
 
@@ -719,6 +746,15 @@ class TerminalView(context: Context, attributes: AttributeSet?) : View(context, 
             return true
 
         val term = mTermSession!!.emulator
+        val kittyFlags = term?.getKittyKeyboardFlags() ?: 0
+        if (kittyFlags != 0) {
+            val kittyCode = KeyHandler.getKittyKeyCode(keyCode, keyMod, kittyFlags, 0, kittyEventType)
+            if (kittyCode != null) {
+                mTermSession!!.write(kittyCode)
+                return true
+            }
+        }
+
         val code = KeyHandler.getCode(keyCode, keyMod, term!!.isCursorKeysApplicationMode(), term.isKeypadApplicationMode())
             ?: return false
         mTermSession!!.write(code)
@@ -766,6 +802,25 @@ class TerminalView(context: Context, attributes: AttributeSet?) : View(context, 
         } else if (event.isSystem) {
             // Let system key events through.
             return super.onKeyUp(keyCode, event)
+        }
+
+        val kittyFlags = mEmulator?.getKittyKeyboardFlags() ?: 0
+        if ((kittyFlags and KeyHandler.KITTY_FLAG_REPORT_EVENT_TYPES) != 0) {
+            var keyMod = 0
+            if (event.isShiftPressed) keyMod = keyMod or KeyHandler.KEYMOD_SHIFT
+            if (event.isAltPressed) keyMod = keyMod or KeyHandler.KEYMOD_ALT
+            if (event.isCtrlPressed) keyMod = keyMod or KeyHandler.KEYMOD_CTRL
+            if (event.isNumLockOn) keyMod = keyMod or KeyHandler.KEYMOD_NUM_LOCK
+            val kittyCode = KeyHandler.getKittyKeyCode(
+                keyCode,
+                keyMod,
+                kittyFlags,
+                event.getUnicodeChar(event.metaState),
+                3
+            )
+            if (kittyCode != null) {
+                mTermSession?.write(kittyCode)
+            }
         }
 
         return true

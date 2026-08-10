@@ -90,6 +90,10 @@ class TerminalEmulator(
         private const val ESC_CSI_UNSUPPORTED_PARAMETER_BYTE = 22
         /** Escape processing: ESC [ <parameter bytes> <intermediate bytes> */
         private const val ESC_CSI_UNSUPPORTED_INTERMEDIATE_BYTE = 23
+        /** Escape processing: CSI < (kitty keyboard pop) */
+        private const val ESC_CSI_LESSTHAN = 24
+        /** Escape processing: CSI = (kitty keyboard set) */
+        private const val ESC_CSI_EQUAL = 25
 
         /** The number of parameter arguments including colon separated sub-parameters. */
         private const val MAX_ESCAPE_PARAMETERS = 32
@@ -119,6 +123,9 @@ class TerminalEmulator(
         private const val DECSET_BIT_LEFTRIGHT_MARGIN_MODE = 1 shl 11
         /** Not really DECSET bit... - http://www.vt100.net/docs/vt510-rm/DECSACE */
         private const val DECSET_BIT_RECTANGULAR_CHANGEATTRIBUTE = 1 shl 12
+
+        // Kitty keyboard protocol enhancements do not use a DECSET bit (2017 is reserved but
+        // actual parameters are pushed via CSI > flags u and queried via CSI ? u).
 
         /** The number of terminal transcript rows that can be scrolled back to. */
         @JvmField val TERMINAL_TRANSCRIPT_ROWS_MIN = 100
@@ -156,6 +163,10 @@ class TerminalEmulator(
 
     private var mTitle: String? = null
     private val mTitleStack = Stack<String>()
+
+    /** Kitty keyboard protocol flags stack. */
+    private val mKittyKeyboardStack = ArrayDeque<Int>()
+    private var mKittyKeyboardFlags: Int = 0
 
     /** The cursor position. Between (0,0) and (mRows-1, mColumns-1). */
     private var mCursorRow = 0
@@ -366,6 +377,19 @@ class TerminalEmulator(
     fun isCursorKeysApplicationMode(): Boolean = isDecsetInternalBitSet(DECSET_BIT_APPLICATION_CURSOR_KEYS)
     fun isMouseTrackingActive(): Boolean = isDecsetInternalBitSet(DECSET_BIT_MOUSE_TRACKING_PRESS_RELEASE) || isDecsetInternalBitSet(DECSET_BIT_MOUSE_TRACKING_BUTTON_EVENT)
 
+    /**
+     * Returns the current kitty keyboard protocol flags.
+     * Non-zero means kitty keyboard mode is enabled.
+     * Bits follow the protocol spec:
+     *   1 = disambiguate escape codes
+     *   2 = report event types
+     *   4 = report alternate key forms
+     *   8 = report all keys as escape codes
+     *   16 = report associated text
+     */
+    fun getKittyKeyboardFlags(): Int = mKittyKeyboardFlags
+    fun isKittyKeyboardMode(): Boolean = mKittyKeyboardFlags != 0
+
     private fun setDefaultTabStops() {
         for (i in 0 until mColumns)
             mTabStop[i] = (i and 7) == 0 && i != 0
@@ -512,6 +536,7 @@ class TerminalEmulator(
                     }
                     ESC_CSI_QUESTIONMARK -> doCsiQuestionMark(b)
                     ESC_CSI_BIGGERTHAN -> doCsiBiggerThan(b)
+                    ESC_CSI_EQUAL -> doCsiEqual(b)
                     ESC_CSI_DOLLAR -> {
                         val originMode = isDecsetInternalBitSet(DECSET_BIT_ORIGIN_MODE)
                         val effectiveTopMargin = if (originMode) mTopMargin else 0
@@ -635,6 +660,24 @@ class TerminalEmulator(
                             mSession.write(String.format(Locale.US, "\u001b[?%d;%d\$y", mode, value))
                         } else {
                             unknownSequence(b)
+                        }
+                    }
+                    ESC_CSI_LESSTHAN -> {
+                        if (b == 'u'.code) {
+                            // Kitty keyboard protocol pop: CSI < u
+                            val n = getArg0(0)
+                            val popCount = if (n == 0) 1 else n
+                            for (i in 0 until popCount) {
+                                val restored = mKittyKeyboardStack.removeLastOrNull()
+                                if (restored != null) {
+                                    mKittyKeyboardFlags = restored
+                                } else {
+                                    mKittyKeyboardFlags = 0
+                                    break
+                                }
+                            }
+                        } else {
+                            parseArg(b)
                         }
                     }
                     ESC_CSI_ARGS_SPACE -> {
@@ -835,11 +878,14 @@ class TerminalEmulator(
                     }
                 }
             }
-            '$'.code -> {
-                continueSequence(ESC_CSI_QUESTIONMARK_ARG_DOLLAR)
-                return
-            }
-            else -> parseArg(b)
+                '$'.code -> {
+                    continueSequence(ESC_CSI_QUESTIONMARK_ARG_DOLLAR)
+                    return
+                }
+                'u'.code -> { // Kitty keyboard protocol query: CSI ? u
+                    mSession.write("\u001b[?${mKittyKeyboardFlags}u")
+                }
+                else -> parseArg(b)
         }
     }
 
@@ -900,7 +946,32 @@ class TerminalEmulator(
             'm'.code -> {
                 Logger.logError(mClient, LOG_TAG, "(ignored) CSI > MODIFY RESOURCE: ${getArg0(-1)} to ${getArg1(-1)}")
             }
+            'u'.code -> { // Kitty keyboard protocol push: CSI > flags ; mode u
+                mKittyKeyboardStack.addLast(mKittyKeyboardFlags)
+                updateKittyKeyboardFlags(getArg0(0), getArg1(1))
+            }
             else -> parseArg(b)
+        }
+    }
+
+    private fun doCsiEqual(b: Int) {
+        if (b == 'u'.code) { // Kitty keyboard protocol set: CSI = flags ; mode u
+            updateKittyKeyboardFlags(getArg0(0), getArg1(1))
+        } else {
+            parseArg(b)
+        }
+    }
+
+    private fun updateKittyKeyboardFlags(requestedFlags: Int, mode: Int) {
+        val flags = requestedFlags and 0x1F
+        mKittyKeyboardFlags = when (mode) {
+            0, 1 -> flags
+            2 -> mKittyKeyboardFlags or flags
+            3 -> mKittyKeyboardFlags and flags.inv()
+            else -> {
+                Logger.logWarn(mClient, LOG_TAG, "Unknown Kitty keyboard flag mode: $mode")
+                flags
+            }
         }
     }
 
@@ -1138,7 +1209,8 @@ class TerminalEmulator(
             }
             '?'.code -> continueSequence(ESC_CSI_QUESTIONMARK)
             '>'.code -> continueSequence(ESC_CSI_BIGGERTHAN)
-            '<'.code, '='.code -> continueSequence(ESC_CSI_UNSUPPORTED_PARAMETER_BYTE)
+            '<'.code -> continueSequence(ESC_CSI_LESSTHAN)
+            '='.code -> continueSequence(ESC_CSI_EQUAL)
             '`'.code -> setCursorColRespectingOriginMode(getArg0(1) - 1) // HPA
             'b'.code -> { // REP - Repeat
                 if (mLastEmittedCodePoint != -1) {
@@ -1742,6 +1814,8 @@ class TerminalEmulator(
     /** Reset terminal state so user can interact with it regardless of present state. */
     fun reset() {
         setCursorStyle()
+        mKittyKeyboardFlags = 0
+        mKittyKeyboardStack.clear()
         mArgIndex = 0
         mContinueSequence = false
         mEscapeState = ESC_NONE
