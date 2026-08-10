@@ -15,6 +15,10 @@ import com.termux.app.TermuxActivity
 import com.termux.app.core.api.DeviceApiError
 import com.termux.app.core.api.Result
 import com.termux.app.core.deviceapi.actions.BatteryAction
+import com.termux.app.core.deviceapi.actions.ClipboardAction
+import com.termux.app.core.deviceapi.actions.ToastAction
+import com.termux.app.core.deviceapi.actions.TorchAction
+import com.termux.app.core.deviceapi.actions.VibrateAction
 import com.termux.app.core.deviceapi.models.BatteryInfo
 import com.termux.app.core.deviceapi.models.DeviceApiAction
 import com.termux.app.core.deviceapi.models.DeviceApiMessage
@@ -34,30 +38,28 @@ import javax.inject.Inject
 
 /**
  * Background service for Device API operations.
- * 
+ *
  * Provides:
- * - Execution of device API actions
- * - Streaming sensor/location data
+ * - Execution of device API actions via explicit IPC binder
+ * - Streaming sensor/location data (extensible)
  * - Event-based communication with terminal sessions
- * - Foreground service for long-running operations
- * 
- * Usage from terminal commands:
- * ```kotlin
- * val result = deviceApiService.executeAction(DeviceApiAction.BATTERY_STATUS)
- * ```
+ * - Foreground service for long-running operations (Android O+)
+ *
+ * Architecture note: All DeviceApiAction implementations are injected via Hilt
+ * and dispatched here. This centralizes permission handling, logging, and
+ * structured error reporting.
  */
 @AndroidEntryPoint
 class DeviceApiService : Service() {
-    
+
     companion object {
         private const val NOTIFICATION_CHANNEL_ID = "termux_device_api"
         private const val NOTIFICATION_ID = 1337
-        private const val ACTION_STOP_SERVICE = "com.termux.STOP_DEVICE_API_SERVICE"
-        
-        fun createIntent(context: Context): Intent {
-            return Intent(context, DeviceApiService::class.java)
-        }
-        
+        const val ACTION_STOP_SERVICE = "com.termux.STOP_DEVICE_API_SERVICE"
+
+        fun createIntent(context: Context): Intent =
+            Intent(context, DeviceApiService::class.java)
+
         fun startService(context: Context) {
             val intent = createIntent(context)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -66,43 +68,43 @@ class DeviceApiService : Service() {
                 context.startService(intent)
             }
         }
-        
+
         fun stopService(context: Context) {
             context.stopService(createIntent(context))
         }
     }
-    
+
     @Inject lateinit var logger: TermuxLogger
     @Inject lateinit var batteryAction: BatteryAction
+    @Inject lateinit var clipboardAction: ClipboardAction
+    @Inject lateinit var vibrateAction: VibrateAction
+    @Inject lateinit var toastAction: ToastAction
+    @Inject lateinit var torchAction: TorchAction
     @Inject @ApplicationScope lateinit var applicationScope: CoroutineScope
-    
+
     private val log: TaggedLogger by lazy { logger.forTag("DeviceApiService") }
-    
-    private val json = Json { 
-        prettyPrint = true 
+
+    private val json = Json {
+        prettyPrint = true
         encodeDefaults = true
     }
-    
-    // Event flow for communicating with terminal sessions
+
     private val _events = MutableSharedFlow<DeviceApiMessage>(extraBufferCapacity = 50)
     val events: SharedFlow<DeviceApiMessage> = _events.asSharedFlow()
-    
-    // Active streaming jobs
+
     private val activeStreams = mutableMapOf<String, Job>()
-    
-    // Service binder for local binding
     private val binder = DeviceApiBinder()
-    
+
     inner class DeviceApiBinder : Binder() {
         fun getService(): DeviceApiService = this@DeviceApiService
     }
-    
+
     override fun onCreate() {
         super.onCreate()
         log.i("DeviceApiService created")
         createNotificationChannel()
     }
-    
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP_SERVICE -> {
@@ -111,31 +113,26 @@ class DeviceApiService : Service() {
                 return START_NOT_STICKY
             }
         }
-        
         log.i("DeviceApiService started")
         startForeground(NOTIFICATION_ID, createNotification())
         return START_STICKY
     }
-    
+
     override fun onBind(intent: Intent?): IBinder {
         log.d("Service bound")
         return binder
     }
-    
+
     override fun onDestroy() {
         log.i("DeviceApiService destroyed")
         cancelAllStreams()
         super.onDestroy()
     }
-    
-    // ========== API Execution ==========
-    
+
+    // ========== Action Dispatch ==========
+
     /**
-     * Execute a device API action by name.
-     * 
-     * @param action The action to execute
-     * @param params Optional parameters
-     * @return Result containing response data or error
+     * Execute a device API action by enum entry.
      */
     suspend fun executeAction(
         action: DeviceApiAction,
@@ -143,98 +140,100 @@ class DeviceApiService : Service() {
     ): Result<String, DeviceApiError> {
         val requestId = UUID.randomUUID().toString()
         val startTime = System.currentTimeMillis()
-        
-        log.d("Executing action", mapOf("action" to action.actionName, "requestId" to requestId))
-        
-        // Emit request event
+
+        log.d("Dispatching action", mapOf("action" to action.actionName, "requestId" to requestId))
+
         _events.tryEmit(DeviceApiMessage.ApiRequest(
             id = requestId,
             action = action.actionName,
             parameters = params
         ))
-        
+
+        return try {
+            val result = dispatchAction(action, params)
+            when (result) {
+                is Result.Success -> {
+                    val data = result.data
+                    val duration = System.currentTimeMillis() - startTime
+                    _events.tryEmit(DeviceApiMessage.ApiResponse(
+                        id = UUID.randomUUID().toString(),
+                        requestId = requestId,
+                        action = action.actionName,
+                        data = data,
+                        executionTimeMs = duration
+                    ))
+                    Result.success(data)
+                }
+                is Result.Error -> {
+                    emitError(requestId, action.actionName, result.error)
+                    Result.error(result.error)
+                }
+                is Result.Loading -> {
+                    Result.error(DeviceApiError.SystemException(
+                        operation = action.actionName,
+                        cause = IllegalStateException("Unexpected loading state")
+                    ))
+                }
+            }
+        } catch (e: SecurityException) {
+            val err = DeviceApiError.PermissionRequired(permission = "unknown", apiAction = action.actionName)
+            emitError(requestId, action.actionName, err)
+            Result.error(err)
+        } catch (e: Exception) {
+            val err = DeviceApiError.SystemException(operation = action.actionName, cause = e)
+            emitError(requestId, action.actionName, err)
+            Result.error(err)
+        }
+    }
+
+    /**
+     * Convenience: get battery status directly.
+     */
+    suspend fun getBatteryStatus(): Result<BatteryInfo, DeviceApiError> =
+        batteryAction.execute()
+
+    // ========== Private Dispatch ==========
+
+    private suspend fun dispatchAction(
+        action: DeviceApiAction,
+        params: Map<String, String>
+    ): Result<String, DeviceApiError> {
         return when (action) {
             DeviceApiAction.BATTERY_STATUS -> {
-                executeBatteryAction(requestId, params, startTime)
+                batteryAction.execute(params).map { json.encodeToString(it) }
             }
-            else -> {
-                val error = DeviceApiError.FeatureNotAvailable(action.actionName)
-                emitError(requestId, action.actionName, error)
-                Result.error(error)
+            DeviceApiAction.CLIPBOARD_GET, DeviceApiAction.CLIPBOARD_SET -> {
+                clipboardAction.execute(params)
             }
+            DeviceApiAction.VIBRATE -> {
+                vibrateAction.execute(params).map { json.encodeToString(true) }
+            }
+            DeviceApiAction.TOAST -> {
+                toastAction.execute(params).map { json.encodeToString(true) }
+            }
+            DeviceApiAction.TORCH -> {
+                torchAction.execute(params).map { json.encodeToString(it) }
+            }
+            else -> Result.error(DeviceApiError.FeatureNotAvailable(action.actionName))
         }
     }
-    
-    private suspend fun executeBatteryAction(
-        requestId: String,
-        params: Map<String, String>,
-        startTime: Long
-    ): Result<String, DeviceApiError> {
-        return when (val result = batteryAction.execute(params)) {
-            is Result.Success -> {
-                val data = json.encodeToString(result.data)
-                val duration = System.currentTimeMillis() - startTime
-                
-                _events.tryEmit(DeviceApiMessage.ApiResponse(
-                    id = UUID.randomUUID().toString(),
-                    requestId = requestId,
-                    action = DeviceApiAction.BATTERY_STATUS.actionName,
-                    data = data,
-                    executionTimeMs = duration
-                ))
-                
-                Result.success(data)
-            }
-            is Result.Error -> {
-                emitError(requestId, DeviceApiAction.BATTERY_STATUS.actionName, result.error)
-                Result.error(result.error)
-            }
-            is Result.Loading -> {
-                Result.error(DeviceApiError.SystemException(
-                    operation = "battery",
-                    cause = IllegalStateException("Unexpected loading state")
-                ))
-            }
-        }
-    }
-    
-    /**
-     * Get battery status directly (convenience method).
-     */
-    suspend fun getBatteryStatus(): Result<BatteryInfo, DeviceApiError> {
-        return batteryAction.execute()
-    }
-    
-    // ========== Streaming ==========
-    
-    /**
-     * Start a streaming operation (e.g., sensor updates).
-     * 
-     * @param action The streaming action
-     * @param params Stream parameters
-     * @return Stream ID for managing the stream
-     */
+
+    // ========== Streaming (placeholder extensibility) ==========
+
     fun startStream(
         action: DeviceApiAction,
         params: Map<String, String> = emptyMap()
     ): Result<String, DeviceApiError> {
         val streamId = UUID.randomUUID().toString()
-        
         log.d("Starting stream", mapOf("action" to action.actionName, "streamId" to streamId))
-        
-        // TODO: Implement streaming for sensors, location, etc.
         return Result.error(DeviceApiError.FeatureNotAvailable("Streaming for ${action.actionName}"))
     }
-    
-    /**
-     * Stop a streaming operation.
-     */
+
     fun stopStream(streamId: String) {
         activeStreams[streamId]?.let { job ->
             log.d("Stopping stream", mapOf("streamId" to streamId))
             job.cancel()
             activeStreams.remove(streamId)
-            
             _events.tryEmit(DeviceApiMessage.StreamEnded(
                 id = UUID.randomUUID().toString(),
                 streamId = streamId,
@@ -243,18 +242,15 @@ class DeviceApiService : Service() {
             ))
         }
     }
-    
-    /**
-     * Cancel all active streams.
-     */
+
     private fun cancelAllStreams() {
         log.d("Cancelling all streams", mapOf("count" to activeStreams.size))
         activeStreams.values.forEach { it.cancel() }
         activeStreams.clear()
     }
-    
+
     // ========== Helpers ==========
-    
+
     private fun emitError(requestId: String, action: String, error: DeviceApiError) {
         _events.tryEmit(DeviceApiMessage.ApiError(
             id = UUID.randomUUID().toString(),
@@ -264,7 +260,7 @@ class DeviceApiService : Service() {
             errorMessage = error.message
         ))
     }
-    
+
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
@@ -275,12 +271,10 @@ class DeviceApiService : Service() {
                 description = "Running device API operations"
                 setShowBadge(false)
             }
-            
-            val notificationManager = getSystemService(NotificationManager::class.java)
-            notificationManager.createNotificationChannel(channel)
+            getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
         }
     }
-    
+
     private fun createNotification(): Notification {
         val pendingIntent = PendingIntent.getActivity(
             this,
@@ -288,16 +282,12 @@ class DeviceApiService : Service() {
             Intent(this, TermuxActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE
         )
-        
         val stopIntent = PendingIntent.getService(
             this,
             0,
-            Intent(this, DeviceApiService::class.java).apply {
-                action = ACTION_STOP_SERVICE
-            },
+            createIntent(this).apply { action = ACTION_STOP_SERVICE },
             PendingIntent.FLAG_IMMUTABLE
         )
-        
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle("Termux Device API")
             .setContentText("Device API service running")

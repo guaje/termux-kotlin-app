@@ -1,0 +1,7 @@
+Termux Kotlin v2.5.0
+
+- Fix APK version metadata so Obtainium and Android install v2.5.0 correctly.
+- Add integrated X11/VNC desktop support with bundled noVNC.
+- Add Kitty keyboard protocol support.
+- Add integrated Termux:API commands and verified per-ABI packages.
+- Publish only consistently signed release APKs.

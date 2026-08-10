@@ -61,6 +61,15 @@ This fork focuses on:
 - Modern Android development practices
 - AI agent integration for development assistance
 
+### ✨ v2.5.0 highlights
+
+- Integrated X11/VNC desktop installer and bundled noVNC viewer
+- Kitty keyboard progressive-enhancement and CSI-u input support
+- Integrated Termux:API native bridge and common device actions
+- Correct APK release metadata for reliable Obtainium installation and updates
+
+See [Obtainium installation](docs/OBTAINIUM.md) and [canuk integration provenance](docs/CANUK_INTEGRATION.md).
+
 ### 🤖 Kotlin-Native Agent Daemon (v2.0.5+)
 
 The agent framework now runs in **pure Kotlin** with zero Python dependency:
@@ -82,7 +91,7 @@ No more separate plugin APKs! These features are now built-in:
 | **Termux:Boot** | ✅ Built-in | Auto-run scripts on device boot |
 | **Termux:Styling** | ✅ Built-in | 11 color schemes, custom fonts, Compose UI |
 | **Termux:Widget** | ✅ Built-in | 3 widget sizes, shortcut execution |
-| **Termux:API** | ✅ Built-in | 20+ hardware APIs (battery, sensors, camera, etc.) |
+| **Termux:API** | ✅ Built-in | Native IPC plus battery, clipboard, toast, vibration, volume, and torch support |
 | Termux:Tasker | 📋 Planned | Tasker integration |
 
 ### 📦 APK Size Explanation
@@ -334,6 +343,10 @@ Choose the appropriate variant for your device:
 - `x86` - 32-bit emulators
 - `universal` - Works on all (larger file size)
 
+### Obtainium
+
+Add this repository URL to Obtainium and select the `termux-app_v2.5.0_universal.apk` release asset. See [docs/OBTAINIUM.md](docs/OBTAINIUM.md), especially the signing-key migration note for existing `com.termux` installations.
+
 ### Build from Source
 
 See [Building](#building) section below.
@@ -356,8 +369,8 @@ cd termux-kotlin-app
 # Build debug APK
 ./gradlew assembleDebug
 
-# Build release APK (requires signing)
-./gradlew assembleRelease
+# Build release APK (requires signing.properties and explicit release metadata)
+TERMUX_APP_VERSION_NAME=2.5.0 TERMUX_APK_VERSION_TAG=v2.5.0 ./gradlew assembleRelease
 
 # APKs will be in app/build/outputs/apk/
 ```

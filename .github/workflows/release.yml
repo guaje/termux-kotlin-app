@@ -7,371 +7,211 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to release (e.g., v1.0.8)'
+        description: 'Tag to release (for example, v2.5.0)'
         required: true
         type: string
 
 permissions:
-  contents: write
+  contents: read
+
+env:
+  JAVA_VERSION: '17'
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  TERMUX_SPLIT_APKS_FOR_RELEASE_BUILDS: '1'
 
 jobs:
   lint-and-test:
-    name: Lint & Test
+    name: Lint, test, and validate version
     runs-on: ubuntu-latest
-    
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v5
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-          cache: 'gradle'
-
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
-
-      - name: Run Lint
-        run: ./gradlew lint --no-daemon
-
-      - name: Run Unit Tests
-        run: ./gradlew testDebugUnitTest --no-daemon
-
-  build-release:
-    name: Build Release APK
-    runs-on: ubuntu-latest
-    needs: lint-and-test
-    
-    steps:
-      - name: Checkout code
+      - name: Checkout source
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
 
-      - name: Set up JDK 17
+      - name: Set up JDK
         uses: actions/setup-java@v5
         with:
-          java-version: '17'
-          distribution: 'temurin'
-          cache: 'gradle'
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: gradle
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
+      - name: Resolve release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$ ]]; then
+            echo "Invalid release tag: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          VERSION_NAME="${RELEASE_TAG#v}"
+          echo "TERMUX_APP_VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
+          echo "TERMUX_APK_VERSION_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
 
-      - name: Decode Keystore
+      - name: Validate Gradle release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL_NAME="$(./gradlew --no-daemon --console=plain -q :app:versionName | tail -n 1)"
+          ACTUAL_CODE="$(./gradlew --no-daemon --console=plain -q :app:versionCode | tail -n 1)"
+          if [[ "$ACTUAL_NAME" != "$TERMUX_APP_VERSION_NAME" ]]; then
+            echo "APK versionName would be '$ACTUAL_NAME', expected '$TERMUX_APP_VERSION_NAME'" >&2
+            exit 1
+          fi
+          if [[ "$RELEASE_TAG" == 'v2.5.0' && "$ACTUAL_CODE" != '20500999' ]]; then
+            echo "v2.5.0 must use versionCode 20500999, got $ACTUAL_CODE" >&2
+            exit 1
+          fi
+          echo "Validated versionName=$ACTUAL_NAME versionCode=$ACTUAL_CODE"
+
+      - name: Validate bundled assets
+        run: ./scripts/validate-bundled-assets.sh
+
+      - name: Run lint and unit tests
+        run: ./gradlew --no-daemon lintDebug testDebugUnitTest
+
+  build-release:
+    name: Build and publish signed APKs
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: gradle
+
+      - name: Resolve release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$ ]]; then
+            echo "Invalid release tag: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          VERSION_NAME="${RELEASE_TAG#v}"
+          echo "TERMUX_APP_VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
+          echo "TERMUX_APK_VERSION_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
+
+      - name: Configure release signing
+        shell: bash
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-        run: |
-          echo "$KEYSTORE_BASE64" | base64 -d > app/termux-release.keystore
-
-      - name: Create signing.properties
-        env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          cat > signing.properties << EOF
+          set -euo pipefail
+          for value in "$KEYSTORE_BASE64" "$KEYSTORE_PASSWORD" "$KEY_ALIAS" "$KEY_PASSWORD"; do
+            if [[ -z "$value" ]]; then
+              echo 'All release signing secrets must be configured.' >&2
+              exit 1
+            fi
+          done
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > app/termux-release.keystore
+          cat > signing.properties <<EOF
           storeFile=termux-release.keystore
           storePassword=$KEYSTORE_PASSWORD
           keyAlias=$KEY_ALIAS
           keyPassword=$KEY_PASSWORD
           EOF
 
-      - name: Build Release APK (Split)
-        env:
-          TERMUX_SPLIT_APKS_FOR_RELEASE_BUILDS: "1"
-        run: ./gradlew assembleRelease --no-daemon
+      - name: Build release APKs
+        run: ./gradlew --no-daemon assembleRelease
 
-      - name: List APKs
-        run: ls -la app/build/outputs/apk/release/
-
-      - name: Get version from tag
-        id: get_version
+      - name: Validate APK metadata and signatures
+        id: validate
+        shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ inputs.tag }}"
-          else
-            VERSION="${GITHUB_REF#refs/tags/}"
-          fi
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          APK_DIR='app/build/outputs/apk/release'
+          BUILD_TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          AAPT="$BUILD_TOOLS/aapt"
+          APKSIGNER="$BUILD_TOOLS/apksigner"
+          EXPECTED_CODE="$(./gradlew --no-daemon --console=plain -q :app:versionCode | tail -n 1)"
 
-      - name: Get previous tag
-        id: prev_tag
+          mapfile -t APKS < <(find "$APK_DIR" -maxdepth 1 -type f -name '*.apk' | sort)
+          if [[ ${#APKS[@]} -ne 5 ]]; then
+            echo "Expected five release APKs (four ABIs plus universal), found ${#APKS[@]}" >&2
+            printf '%s\n' "${APKS[@]}"
+            exit 1
+          fi
+
+          : > "$APK_DIR/sha256sums.txt"
+          EXPECTED_CERT=''
+          for apk in "${APKS[@]}"; do
+            BADGING="$($AAPT dump badging "$apk")"
+            PACKAGE_ID="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<< "$BADGING")"
+            VERSION_NAME="$(sed -n "s/^package:.*versionName='\([^']*\)'.*/\1/p" <<< "$BADGING")"
+            VERSION_CODE="$(sed -n "s/^package:.*versionCode='\([^']*\)'.*/\1/p" <<< "$BADGING")"
+
+            [[ "$PACKAGE_ID" == 'com.termux' ]] || { echo "Unexpected package ID in $apk: $PACKAGE_ID" >&2; exit 1; }
+            [[ "$VERSION_NAME" == "$TERMUX_APP_VERSION_NAME" ]] || { echo "Unexpected versionName in $apk: $VERSION_NAME" >&2; exit 1; }
+            [[ "$VERSION_CODE" == "$EXPECTED_CODE" ]] || { echo "Unexpected versionCode in $apk: $VERSION_CODE" >&2; exit 1; }
+            if grep -q '^application-debuggable' <<< "$BADGING"; then
+              echo "Release APK is debuggable: $apk" >&2
+              exit 1
+            fi
+
+            VERIFY="$($APKSIGNER verify --verbose --print-certs "$apk")"
+            CERT="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' <<< "$VERIFY" | head -n 1)"
+            [[ -n "$CERT" ]] || { echo "Could not read signing certificate from $apk" >&2; exit 1; }
+            if [[ -z "$EXPECTED_CERT" ]]; then
+              EXPECTED_CERT="$CERT"
+            elif [[ "$CERT" != "$EXPECTED_CERT" ]]; then
+              echo "Release APKs do not share one signing certificate." >&2
+              exit 1
+            fi
+
+            (cd "$APK_DIR" && sha256sum "$(basename "$apk")") >> "$APK_DIR/sha256sums.txt"
+          done
+
+          echo "certificate_sha256=$EXPECTED_CERT" >> "$GITHUB_OUTPUT"
+          echo "Validated ${#APKS[@]} signed APKs with versionName=$TERMUX_APP_VERSION_NAME versionCode=$EXPECTED_CODE"
+
+      - name: Create release notes
+        shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            CURRENT_TAG="${{ inputs.tag }}"
-          else
-            CURRENT_TAG="${GITHUB_REF#refs/tags/}"
-          fi
-          PREV_TAG=$(git tag -l 'v*' --sort=-v:refname | grep -v "^${CURRENT_TAG}$" | head -n1)
-          if [ -z "$PREV_TAG" ]; then
-            PREV_TAG=$(git rev-list --max-parents=0 HEAD)
-          fi
-          echo "tag=$PREV_TAG" >> $GITHUB_OUTPUT
-          echo "Previous tag: $PREV_TAG"
+          cat > release_notes.md <<EOF
+          ## Termux Kotlin $RELEASE_TAG
 
-      - name: Generate changelog from commits
-        id: changelog
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            CURRENT_TAG="${{ inputs.tag }}"
-          else
-            CURRENT_TAG="${GITHUB_REF#refs/tags/}"
-          fi
-          PREV_TAG="${{ steps.prev_tag.outputs.tag }}"
-          
-          echo "Generating changelog from $PREV_TAG to $CURRENT_TAG"
-          
-          # Generate changelog grouped by type
-          {
-            echo "CHANGELOG<<EOF"
-            
-            # Features
-            FEATURES=$(git log ${PREV_TAG}..HEAD --pretty=format:"%s" | grep -iE "^feat(\(.+\))?:" | sed 's/^feat(\([^)]*\)):/- **\1:**/' | sed 's/^feat:/- /' || true)
-            if [ -n "$FEATURES" ]; then
-              echo "### ✨ Features"
-              echo "$FEATURES"
-              echo ""
-            fi
-            
-            # Bug fixes
-            FIXES=$(git log ${PREV_TAG}..HEAD --pretty=format:"%s" | grep -iE "^fix(\(.+\))?:" | sed 's/^fix(\([^)]*\)):/- **\1:**/' | sed 's/^fix:/- /' || true)
-            if [ -n "$FIXES" ]; then
-              echo "### 🐛 Bug Fixes"
-              echo "$FIXES"
-              echo ""
-            fi
-            
-            # Performance
-            PERF=$(git log ${PREV_TAG}..HEAD --pretty=format:"%s" | grep -iE "^perf(\(.+\))?:" | sed 's/^perf(\([^)]*\)):/- **\1:**/' | sed 's/^perf:/- /' || true)
-            if [ -n "$PERF" ]; then
-              echo "### ⚡ Performance"
-              echo "$PERF"
-              echo ""
-            fi
-            
-            # Documentation
-            DOCS=$(git log ${PREV_TAG}..HEAD --pretty=format:"%s" | grep -iE "^docs(\(.+\))?:" | sed 's/^docs(\([^)]*\)):/- **\1:**/' | sed 's/^docs:/- /' || true)
-            if [ -n "$DOCS" ]; then
-              echo "### 📚 Documentation"
-              echo "$DOCS"
-              echo ""
-            fi
-            
-            # CI/Build
-            CI=$(git log ${PREV_TAG}..HEAD --pretty=format:"%s" | grep -iE "^(ci|build|chore)(\(.+\))?:" | sed 's/^ci(\([^)]*\)):/- **\1:**/' | sed 's/^ci:/- /' | sed 's/^build(\([^)]*\)):/- **\1:**/' | sed 's/^build:/- /' | sed 's/^chore(\([^)]*\)):/- **\1:**/' | sed 's/^chore:/- /' || true)
-            if [ -n "$CI" ]; then
-              echo "### 🔧 Maintenance"
-              echo "$CI"
-              echo ""
-            fi
-            
-            # Other commits (not matching conventional commits)
-            OTHER=$(git log ${PREV_TAG}..HEAD --pretty=format:"%s" | grep -viE "^(feat|fix|perf|docs|ci|build|chore|refactor|test|style)(\(.+\))?:" | grep -v "^Merge" | head -10 | sed 's/^/- /' || true)
-            if [ -n "$OTHER" ]; then
-              echo "### 📝 Other Changes"
-              echo "$OTHER"
-              echo ""
-            fi
-            
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
+          This release contains integrated X11/VNC, Kitty keyboard protocol support, integrated Termux:API, and the Obtainium version metadata fix.
 
-      - name: Generate Release Notes
-        id: release_notes
-        run: |
-          cat > release_notes.md << 'RELEASE_EOF'
-          ## 🚀 Termux Kotlin ${{ steps.get_version.outputs.VERSION }}
-          
-          ${{ steps.changelog.outputs.CHANGELOG }}
-          
-          ### 📦 Downloads
-          
-          | Architecture | Recommended For |
-          |-------------|-----------------|
-          | `arm64-v8a` | **Most Android devices** (2017+) |
-          | `armeabi-v7a` | Older 32-bit phones |
-          | `x86_64` | Emulators, ChromeOS |
-          | `x86` | Older emulators |
-          | `universal` | All devices (larger file) |
-          
-          ### 📲 Installation
-          1. Download the APK for your architecture
-          2. Enable "Install from unknown sources" if prompted
-          3. Install and run Termux!
-          
-          ### ⚠️ Note
-          If you have Termux from F-Droid or Play Store, uninstall it first (different signature).
-          
-          ---
-          *100% Kotlin • Built from commit ${{ github.sha }}*
-          RELEASE_EOF
+          The APK manifest reports versionName \`$TERMUX_APP_VERSION_NAME\` with a monotonically increasing versionCode. All attached APKs are release-signed with certificate SHA-256 \`${{ steps.validate.outputs.certificate_sha256 }}\`.
 
-      - name: Create GitHub Release
+          ### Obtainium
+
+          Add \`${{ github.server_url }}/${{ github.repository }}\` and select \`termux-app_${RELEASE_TAG}_universal.apk\`, or the APK matching your device ABI.
+
+          If an older \`com.termux\` installation was signed by F-Droid, Google Play, or a debug/test key, Android requires a one-time uninstall before this signing lineage can be installed.
+          EOF
+
+      - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.get_version.outputs.VERSION }}
-          name: "🚀 Termux Kotlin ${{ steps.get_version.outputs.VERSION }}"
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Termux Kotlin ${{ env.RELEASE_TAG }}
           body_path: release_notes.md
-          draft: false
-          prerelease: ${{ contains(steps.get_version.outputs.VERSION, 'alpha') || contains(steps.get_version.outputs.VERSION, 'beta') || contains(steps.get_version.outputs.VERSION, 'rc') }}
+          prerelease: ${{ contains(env.RELEASE_TAG, '-alpha.') || contains(env.RELEASE_TAG, '-beta.') || contains(env.RELEASE_TAG, '-rc.') }}
           files: |
             app/build/outputs/apk/release/*.apk
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            app/build/outputs/apk/release/sha256sums.txt
 
-      - name: Upload Release APKs as Artifact
+      - name: Upload validated APK artifacts
         uses: actions/upload-artifact@v6
         with:
-          name: release-apks
-          path: app/build/outputs/apk/release/*.apk
+          name: termux-kotlin-${{ env.RELEASE_TAG }}
+          path: |
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/apk/release/sha256sums.txt
           retention-days: 90
-
-  update-changelog:
-    name: Update CHANGELOG.md
-    runs-on: ubuntu-latest
-    needs: build-release
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          ref: main
-
-      - name: Get version from tag
-        id: get_version
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ inputs.tag }}"
-          else
-            VERSION="${GITHUB_REF#refs/tags/}"
-          fi
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Get previous tag
-        id: prev_tag
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            CURRENT_TAG="${{ inputs.tag }}"
-          else
-            CURRENT_TAG="${GITHUB_REF#refs/tags/}"
-          fi
-          PREV_TAG=$(git tag -l 'v*' --sort=-v:refname | grep -v "^${CURRENT_TAG}$" | head -n1)
-          if [ -z "$PREV_TAG" ]; then
-            PREV_TAG=$(git rev-list --max-parents=0 HEAD)
-          fi
-          echo "tag=$PREV_TAG" >> $GITHUB_OUTPUT
-
-      - name: Generate changelog entry
-        id: changelog_entry
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            CURRENT_TAG="${{ inputs.tag }}"
-          else
-            CURRENT_TAG="${GITHUB_REF#refs/tags/}"
-          fi
-          PREV_TAG="${{ steps.prev_tag.outputs.tag }}"
-          DATE=$(date +%Y-%m-%d)
-          
-          {
-            echo "ENTRY<<EOF"
-            echo "## [$CURRENT_TAG] - $DATE"
-            echo ""
-            
-            # Features
-            FEATURES=$(git log ${PREV_TAG}..HEAD --pretty=format:"%s" | grep -iE "^feat(\(.+\))?:" | sed 's/^feat(\([^)]*\)):/- **\1:**/' | sed 's/^feat:/- /' || true)
-            if [ -n "$FEATURES" ]; then
-              echo "### ✨ Features"
-              echo "$FEATURES"
-              echo ""
-            fi
-            
-            # Bug fixes
-            FIXES=$(git log ${PREV_TAG}..HEAD --pretty=format:"%s" | grep -iE "^fix(\(.+\))?:" | sed 's/^fix(\([^)]*\)):/- **\1:**/' | sed 's/^fix:/- /' || true)
-            if [ -n "$FIXES" ]; then
-              echo "### 🐛 Bug Fixes"
-              echo "$FIXES"
-              echo ""
-            fi
-            
-            # Performance
-            PERF=$(git log ${PREV_TAG}..HEAD --pretty=format:"%s" | grep -iE "^perf(\(.+\))?:" | sed 's/^perf(\([^)]*\)):/- **\1:**/' | sed 's/^perf:/- /' || true)
-            if [ -n "$PERF" ]; then
-              echo "### ⚡ Performance"
-              echo "$PERF"
-              echo ""
-            fi
-            
-            # Documentation
-            DOCS=$(git log ${PREV_TAG}..HEAD --pretty=format:"%s" | grep -iE "^docs(\(.+\))?:" | sed 's/^docs(\([^)]*\)):/- **\1:**/' | sed 's/^docs:/- /' || true)
-            if [ -n "$DOCS" ]; then
-              echo "### 📚 Documentation"
-              echo "$DOCS"
-              echo ""
-            fi
-            
-            # CI/Build
-            CI=$(git log ${PREV_TAG}..HEAD --pretty=format:"%s" | grep -iE "^(ci|build|chore)(\(.+\))?:" | sed 's/^ci(\([^)]*\)):/- **\1:**/' | sed 's/^ci:/- /' | sed 's/^build(\([^)]*\)):/- **\1:**/' | sed 's/^build:/- /' | sed 's/^chore(\([^)]*\)):/- **\1:**/' | sed 's/^chore:/- /' || true)
-            if [ -n "$CI" ]; then
-              echo "### 🔧 Maintenance"
-              echo "$CI"
-              echo ""
-            fi
-            
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
-
-      - name: Update CHANGELOG.md
-        run: |
-          VERSION="${{ steps.get_version.outputs.VERSION }}"
-          
-          # Create CHANGELOG.md if it doesn't exist
-          if [ ! -f CHANGELOG.md ]; then
-            cat > CHANGELOG.md << 'HEADER'
-          # Changelog
-          
-          All notable changes to Termux Kotlin will be documented in this file.
-          
-          The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-          and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-          
-          HEADER
-          fi
-          
-          # Check if this version already exists in changelog
-          if grep -q "## \[$VERSION\]" CHANGELOG.md; then
-            echo "Version $VERSION already in CHANGELOG.md, skipping update"
-            exit 0
-          fi
-          
-          # Insert new entry after the header
-          ENTRY="${{ steps.changelog_entry.outputs.ENTRY }}"
-          
-          # Create temp file with new entry
-          {
-            head -n 7 CHANGELOG.md
-            echo ""
-            echo "$ENTRY"
-            tail -n +8 CHANGELOG.md
-          } > CHANGELOG.tmp
-          mv CHANGELOG.tmp CHANGELOG.md
-
-      - name: Commit and push CHANGELOG
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          if git diff --quiet CHANGELOG.md; then
-            echo "No changes to CHANGELOG.md"
-            exit 0
-          fi
-          
-          git add CHANGELOG.md
-          git commit -m "docs: Update CHANGELOG for ${{ steps.get_version.outputs.VERSION }} [skip ci]"
-          git push origin main
