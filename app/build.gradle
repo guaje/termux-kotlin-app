@@ -31,11 +31,25 @@ android {
         applicationId "com.termux"
         minSdk libs.versions.minSdk.get().toInteger()
         targetSdk libs.versions.targetSdk.get().toInteger()
-        versionCode 123
-        versionName "1.2.3"
 
-        if (appVersionName) versionName = appVersionName
+        // --- Deterministic versionCode / versionName ---
+        // If TERMUX_APP_VERSION_NAME is set (CI or local), use it; otherwise derive from the latest git tag.
+        // versionCode = major*10_000_000 + minor*100_000 + patch*1_000 + channel,
+        // channel suffix mapping:
+        //   alpha  → 1..199  (alpha.1 = 1)
+        //   beta   → 200..399 (beta.1 = 200)
+        //   rc     → 400..899 (rc.1 = 400)
+        //   stable → 999
+        // For v2.5.0 stable → 20500999.
+        def (resolvedVersionName, resolvedVersionCode) = resolveVersionFromTagOrEnv(
+            appVersionName,
+            getRootDir()
+        )
+
+        versionName resolvedVersionName
+        versionCode resolvedVersionCode
         validateVersionName(versionName)
+        validateVersionCode(versionCode)
 
         buildConfigField "String", "TERMUX_PACKAGE_VARIANT", "\"" + project.ext.packageVariant + "\"" // Used by TermuxApplication class
 
@@ -147,6 +161,19 @@ android {
     buildFeatures {
         buildConfig true
         compose true
+        viewBinding true
+    }
+
+    // A production APK must receive its version from the release workflow. Falling
+    // back to an old source tag is useful for local debug builds but caused issue #26
+    // when it was accidentally used for published APKs.
+    gradle.taskGraph.whenReady { graph ->
+        def releaseRequested = graph.allTasks.any {
+            it.project == project && it.name.toLowerCase(Locale.ROOT).contains("release")
+        }
+        if (releaseRequested && !appVersionName) {
+            throw new GradleException("Release builds require TERMUX_APP_VERSION_NAME (for example, 2.5.0).")
+        }
     }
 }
 
@@ -195,6 +222,7 @@ dependencies {
     // UI Libraries
     implementation libs.material
     implementation libs.bundles.markwon
+    implementation libs.androidx.webkit
     
     // Utilities
     implementation libs.snakeyaml
@@ -218,11 +246,122 @@ task versionName {
     }
 }
 
+task versionCode {
+    doLast {
+        print android.defaultConfig.versionCode
+    }
+}
+
 def validateVersionName(String versionName) {
     // https://semver.org/spec/v2.0.0.html#is-there-a-suggested-regular-expression-regex-to-check-a-semver-string
     // ^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$
     if (!java.util.regex.Pattern.matches("^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?\$", versionName))
         throw new GradleException("The versionName '"  + versionName + "' is not a valid version as per semantic version '2.0.0' spec in the format 'major.minor.patch(-prerelease)(+buildmetadata)'. https://semver.org/spec/v2.0.0.html.")
+}
+
+static def resolveVersionFromTagOrEnv(String envVersionName, File rootDir) {
+    if (envVersionName && !envVersionName.trim().isEmpty()) {
+        def supplied = envVersionName.trim()
+        def clean = supplied.startsWith("v") ? supplied.substring(1) : supplied
+        def code = versionNameToVersionCode(clean)
+        return [clean, code]
+    }
+    def tag = getLatestGitTag(rootDir)
+    if (tag) {
+        def clean = tag.startsWith("v") ? tag.substring(1) : tag
+        def code = versionNameToVersionCode(clean)
+        return [clean, code]
+    }
+    // Shallow PR checkouts may not contain tags. Non-release tasks still need valid
+    // Android metadata so lint, tests, dependency reports, and debug APKs can run.
+    // The task-graph guard above continues to reject every release build unless
+    // TERMUX_APP_VERSION_NAME is explicitly provided.
+    return ["0.0.0-alpha.1", versionNameToVersionCode("0.0.0-alpha.1")]
+}
+
+static def getLatestGitTag(File rootDir) {
+    try {
+        def proc = ["git", "-C", rootDir.absolutePath, "describe", "--tags", "--match", "v*", "--abbrev=0"].execute()
+        proc.waitFor()
+        if (proc.exitValue() == 0) {
+            return proc.text.trim()
+        }
+    } catch (Exception ignored) {}
+    try {
+        def proc = ["git", "-C", rootDir.absolutePath, "tag", "-l", "v*", "--sort=-v:refname"].execute()
+        proc.waitFor()
+        def tags = proc.text.readLines()
+        if (!tags.isEmpty()) return tags[0].trim()
+    } catch (Exception ignored) {}
+    return null
+}
+
+/**
+ * Convert semantic version string to deterministic versionCode.
+ * Formula: major*10_000_000 + minor*100_000 + patch*1_000 + channel
+ *
+ * Channel suffix mapping:
+ *   alpha N → 0 + N   (alpha.1 = 1, alpha.199 = 199)
+ *   beta  N → 199 + N (beta.1 = 200, beta.199 = 398)
+ *   rc    N → 399 + N (rc.1 = 400, rc.499 = 898)
+ *   stable  → 999
+ *
+ * Examples:
+ *   2.5.0          → 20500999
+ *   2.5.0-alpha.1  → 20500001
+ *   2.5.0-beta.3   → 20500202
+ *   2.5.0-rc.1     → 20500400
+ */
+static def versionNameToVersionCode(String versionName) {
+    def matcher = java.util.regex.Pattern.compile(
+        "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-(([a-zA-Z]+)(?:\\.([1-9]\\d*))?))?(?:\\+[0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*)?\$"
+    ).matcher(versionName)
+    if (!matcher.matches()) {
+        throw new GradleException("Cannot parse version '${versionName}' for versionCode generation")
+    }
+    def major = Integer.parseInt(matcher.group(1))
+    def minor = Integer.parseInt(matcher.group(2))
+    def patch = Integer.parseInt(matcher.group(3))
+    def preStr = matcher.group(4)
+
+    // Android reserves version codes above 2,100,000,000.
+    if (major > 209 || minor > 99 || patch > 99) {
+        throw new GradleException("Version component out of range (major<=209, minor<=99, patch<=99): ${major}.${minor}.${patch}")
+    }
+
+    def channel = 999 // stable default
+    if (preStr) {
+        def label = (matcher.group(5) ?: "").toLowerCase()
+        def num = matcher.group(6) ? Integer.parseInt(matcher.group(6)) : 1
+        switch (label) {
+            case "alpha":
+                if (num < 1 || num > 199) throw new GradleException("alpha pre-release number must be 1..199, got ${num}")
+                channel = num
+                break
+            case "beta":
+                if (num < 1 || num > 199) throw new GradleException("beta pre-release number must be 1..199, got ${num}")
+                channel = 199 + num
+                break
+            case "rc":
+                if (num < 1 || num > 499) throw new GradleException("rc pre-release number must be 1..499, got ${num}")
+                channel = 399 + num
+                break
+            default:
+                throw new GradleException("Unsupported pre-release channel '${label}'; use alpha, beta, or rc")
+        }
+    }
+
+    def code = major * 10_000_000L + minor * 100_000L + patch * 1_000L + channel
+    if (code > 2_100_000_000L) {
+        throw new GradleException("versionCode ${code} exceeds Android's maximum (2100000000)")
+    }
+    return (int) code
+}
+
+def validateVersionCode(int versionCode) {
+    if (versionCode <= 0 || versionCode > 2_100_000_000) {
+        throw new GradleException("versionCode must be in Android's range 1..2100000000, got ${versionCode}")
+    }
 }
 
 def downloadBootstrap(String arch, String expectedChecksum, String version, File projDir) {

@@ -9,6 +9,22 @@ object KeyHandler {
     const val KEYMOD_SHIFT = 0x20000000
     const val KEYMOD_NUM_LOCK = 0x10000000
 
+    // Kitty-enhanced modifiers (reported via CSI u; bit indices per protocol spec)
+    const val KEYMOD_META = 0x08000000
+    const val KEYMOD_SUPER = 0x04000000
+    const val KEYMOD_HYPER = 0x02000000
+
+    /**
+     * Kitty keyboard protocol flags.
+     * Applications combine these bits to request progressive enhancements.
+     */
+    const val KITTY_FLAG_NONE = 0
+    const val KITTY_FLAG_DISAMBIGUATE = 1
+    const val KITTY_FLAG_REPORT_EVENT_TYPES = 2
+    const val KITTY_FLAG_REPORT_ALTERNATES = 4
+    const val KITTY_FLAG_REPORT_ALL = 8
+    const val KITTY_FLAG_REPORT_ASSOCIATED = 16
+
     private val TERMCAP_TO_KEYCODE = HashMap<String, Int>().apply {
         // terminfo: http://pubs.opengroup.org/onlinepubs/7990989799/xcurses/terminfo.html
         // termcap: http://man7.org/linux/man-pages/man5/termcap.5.html
@@ -181,5 +197,136 @@ object KeyHandler {
             else -> return start + lastChar
         }
         return "$start;$modifier$lastChar"
+    }
+
+    /**
+     * Encode a modifier bitmask for the Kitty keyboard protocol.
+     *
+     * Kitty modifier encoding:
+     *   1 = shift
+     *   2 = alt
+     *   4 = ctrl
+     *   8 = super
+     *   16 = hyper
+     *   32 = meta
+     *   64 = caps_lock (not mapped from Android meta state)
+     *   128 = num_lock (mapped when KEYMOD_NUM_LOCK is present)
+     */
+    @JvmStatic
+    fun kittyModifier(keymod: Int): Int {
+        var mod = 0
+        if ((keymod and KEYMOD_SHIFT) != 0) mod = mod or 1
+        if ((keymod and KEYMOD_ALT) != 0) mod = mod or 2
+        if ((keymod and KEYMOD_CTRL) != 0) mod = mod or 4
+        if ((keymod and KEYMOD_SUPER) != 0) mod = mod or 8
+        if ((keymod and KEYMOD_HYPER) != 0) mod = mod or 16
+        if ((keymod and KEYMOD_META) != 0) mod = mod or 32
+        if ((keymod and KEYMOD_NUM_LOCK) != 0) mod = mod or 128
+        return mod
+    }
+
+    /**
+     * Map an Android [keyCode] + [keyMod] to a Kitty CSI-u sequence when the
+     * terminal has Kitty keyboard mode enabled.
+     *
+     * @return non-null CSI-u string if the key should be sent in kitty format,
+     *         null if legacy handling should be used.
+     *
+     * Supported progressive-enhancement flags:
+     *   - 1: disambiguate escape codes
+     *   - 2: report event types
+     *   - 4: report alternate key forms
+     *   - 8: report all keys as escape codes
+     *   - 16: report associated text
+     */
+    @JvmStatic
+    @JvmOverloads
+    fun getKittyKeyCode(
+        keyCode: Int,
+        keyMod: Int,
+        kittyFlags: Int,
+        unicodeCodePoint: Int = 0,
+        eventType: Int = 1
+    ): String? {
+        if (kittyFlags and KITTY_FLAG_DISAMBIGUATE == 0) return null
+
+        val modifier = kittyModifier(keyMod)
+        val specialCode = kittyKeyCode(keyCode, 0)
+        val printableCode = unicodeCodePoint.takeIf { Character.isValidCodePoint(it) && it >= 32 }
+        val shouldReportPrintable = (kittyFlags and KITTY_FLAG_REPORT_ALL) != 0 ||
+            (modifier and (2 or 4 or 8 or 16 or 32)) != 0
+        val code = specialCode ?: printableCode?.takeIf { shouldReportPrintable } ?: return null
+        val sb = StringBuilder().appendCodePoint(0x1B).append('[')
+
+        // Primary key code
+        sb.append(code)
+
+        // Alternate / shifted key code (flag 4)
+        val shifted = if ((kittyFlags and KITTY_FLAG_REPORT_ALTERNATES) != 0 && unicodeCodePoint > 0 && unicodeCodePoint != code) {
+            unicodeCodePoint
+        } else null
+
+        if (shifted != null && shifted != code) {
+            sb.append(':').append(shifted)
+        }
+
+        // Base layout code could be appended as third field if we tracked it; omitted here.
+
+        val reportsEventTypes = (kittyFlags and KITTY_FLAG_REPORT_EVENT_TYPES) != 0
+        val normalizedEventType = eventType.coerceIn(1, 3)
+        if (modifier > 0 || (reportsEventTypes && normalizedEventType != 1)) {
+            // Kitty encodes modifiers as one plus the bit mask; 1 means no modifiers.
+            sb.append(';').append(modifier + 1)
+            if (reportsEventTypes && normalizedEventType != 1) {
+                sb.append(':').append(normalizedEventType)
+            }
+        }
+
+        sb.append('u')
+        return sb.toString()
+    }
+
+    /**
+     * Map physical Android keycodes to logical Kitty key codes.
+     *
+     * Values follow the kitty spec:
+     * https://sw.kovidgoyal.net/kitty/keyboard-protocol/#id3
+     */
+    @JvmStatic
+    @JvmOverloads
+    fun kittyKeyCode(keyCode: Int, unicodeCodePoint: Int = 0): Int? {
+        return when (keyCode) {
+            android.view.KeyEvent.KEYCODE_ESCAPE, android.view.KeyEvent.KEYCODE_BACK -> 27
+            android.view.KeyEvent.KEYCODE_ENTER -> 13
+            android.view.KeyEvent.KEYCODE_TAB -> 9
+            android.view.KeyEvent.KEYCODE_SPACE -> 32
+            android.view.KeyEvent.KEYCODE_DEL -> 127
+            android.view.KeyEvent.KEYCODE_FORWARD_DEL -> 57349
+            android.view.KeyEvent.KEYCODE_INSERT -> 57348
+            android.view.KeyEvent.KEYCODE_MOVE_HOME -> 57356
+            android.view.KeyEvent.KEYCODE_MOVE_END -> 57357
+            android.view.KeyEvent.KEYCODE_PAGE_UP -> 57354
+            android.view.KeyEvent.KEYCODE_PAGE_DOWN -> 57355
+            android.view.KeyEvent.KEYCODE_DPAD_UP -> 57352
+            android.view.KeyEvent.KEYCODE_DPAD_DOWN -> 57353
+            android.view.KeyEvent.KEYCODE_DPAD_LEFT -> 57350
+            android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> 57351
+            android.view.KeyEvent.KEYCODE_F1 -> 57364
+            android.view.KeyEvent.KEYCODE_F2 -> 57365
+            android.view.KeyEvent.KEYCODE_F3 -> 57366
+            android.view.KeyEvent.KEYCODE_F4 -> 57367
+            android.view.KeyEvent.KEYCODE_F5 -> 57368
+            android.view.KeyEvent.KEYCODE_F6 -> 57369
+            android.view.KeyEvent.KEYCODE_F7 -> 57370
+            android.view.KeyEvent.KEYCODE_F8 -> 57371
+            android.view.KeyEvent.KEYCODE_F9 -> 57372
+            android.view.KeyEvent.KEYCODE_F10 -> 57373
+            android.view.KeyEvent.KEYCODE_F11 -> 57374
+            android.view.KeyEvent.KEYCODE_F12 -> 57375
+            android.view.KeyEvent.KEYCODE_SYSRQ -> 57361
+            android.view.KeyEvent.KEYCODE_BREAK -> 57362
+            // Unicode fallback for printable characters when REPORT_ALL is active
+            else -> if (unicodeCodePoint in 32..0x10FFFF) unicodeCodePoint else null
+        }
     }
 }

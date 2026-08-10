@@ -52,6 +52,7 @@
     <string name="title_create_named_session">New named session</string>
     <string name="action_create_named_session_confirm">Create</string>
 
+    <string name="action_open_desktop">Open desktop</string>
     <string name="action_toggle_soft_keyboard">Keyboard</string>
 
     <string name="msg_enabling_terminal_toolbar">Enabling Terminal Toolbar</string>

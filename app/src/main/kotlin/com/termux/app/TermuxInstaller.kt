@@ -32,6 +32,7 @@ import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStreamReader
+import java.security.MessageDigest
 import java.util.zip.ZipInputStream
 
 /**
@@ -101,7 +102,17 @@ object TermuxInstaller {
             if (TermuxFileUtils.isTermuxPrefixDirectoryEmpty()) {
                 Logger.logInfo(LOG_TAG, "The termux prefix directory \"$TERMUX_PREFIX_DIR_PATH\" exists but is empty or only contains specific unimportant files.")
             } else {
-                whenDone.run()
+                // Existing installations also need the v2.5.0 API packages. Run the
+                // idempotent migration before opening the first terminal session.
+                Thread {
+                    try {
+                        installEssentialPackages(activity)
+                    } catch (e: Exception) {
+                        Logger.logStackTraceWithMessage(LOG_TAG, "Essential package migration failed", e)
+                    } finally {
+                        activity.runOnUiThread(whenDone)
+                    }
+                }.start()
                 return
             }
         } else if (FileUtils.fileExists(TERMUX_PREFIX_DIR_PATH, false)) {
@@ -242,6 +253,10 @@ object TermuxInstaller {
                 }
 
                 Logger.logInfo(LOG_TAG, "Bootstrap packages installed successfully.")
+
+                // Install the verified Termux:API bridge and util-linux packages bundled
+                // with the APK. Failure is logged without making the terminal unusable.
+                installEssentialPackages(activity)
 
                 // Recreate env file since termux prefix was wiped earlier
                 TermuxShellEnvironment.writeEnvironmentToFile(activity)
@@ -402,6 +417,93 @@ object TermuxInstaller {
 
     private fun ensureDirectoryExists(directory: File): Error? {
         return FileUtils.createDirectoryFile(directory.absolutePath)
+    }
+
+    /** Install bundled packages only after validating their recorded SHA-256 digests. */
+    private fun installEssentialPackages(activity: Activity) {
+        val migrationMarker = File(TERMUX_PREFIX_DIR_PATH, "var/lib/termux-kotlin/essential-packages-v2.5.0")
+        if (migrationMarker.isFile) return
+
+        val architecture = when (Build.SUPPORTED_ABIS.firstOrNull()) {
+            "arm64-v8a" -> "aarch64"
+            "armeabi-v7a" -> "arm"
+            "x86_64" -> "x86_64"
+            "x86" -> "i686"
+            else -> {
+                Logger.logWarn(LOG_TAG, "Unsupported ABI for bundled packages: ${Build.SUPPORTED_ABIS.firstOrNull()}")
+                return
+            }
+        }
+        val packageNames = listOf(
+            "termux-api_0.59.1-1_${architecture}.deb",
+            "util-linux_2.41.2-1_${architecture}.deb"
+        )
+        val checksums = activity.assets.open("bootstrap-packages/sha256sums.txt")
+            .bufferedReader()
+            .useLines { lines ->
+                lines.filter { it.isNotBlank() && !it.startsWith("#") }
+                    .associate { line ->
+                        val parts = line.trim().split(Regex("\\s+"), limit = 2)
+                        require(parts.size == 2) { "Malformed bootstrap package checksum entry" }
+                        parts[1] to parts[0].lowercase()
+                    }
+            }
+        val dpkg = File(TERMUX_PREFIX_DIR_PATH, "bin/dpkg")
+        if (!dpkg.canExecute()) {
+            Logger.logWarn(LOG_TAG, "dpkg is unavailable; skipping bundled essential packages")
+            return
+        }
+
+        val temporaryDirectory = File(activity.cacheDir, "bootstrap-packages-$architecture")
+        temporaryDirectory.deleteRecursively()
+        temporaryDirectory.mkdirs()
+        try {
+            packageNames.forEach { packageName ->
+                val relativePath = "$architecture/$packageName"
+                val expected = checksums[relativePath]
+                    ?: throw IllegalStateException("Missing checksum for $relativePath")
+                val packageFile = File(temporaryDirectory, packageName)
+                activity.assets.open("bootstrap-packages/$relativePath").use { input ->
+                    packageFile.outputStream().use { output -> input.copyTo(output) }
+                }
+                val actual = packageFile.inputStream().use { input ->
+                    val digest = MessageDigest.getInstance("SHA-256")
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        digest.update(buffer, 0, count)
+                    }
+                    digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+                }
+                if (actual != expected) {
+                    throw SecurityException("Checksum mismatch for $relativePath")
+                }
+
+                val process = ProcessBuilder(dpkg.absolutePath, "--force-overwrite", "-i", packageFile.absolutePath)
+                    .directory(TERMUX_PREFIX_DIR)
+                    .redirectErrorStream(true)
+                    .apply {
+                        environment()["HOME"] = TermuxConstants.TERMUX_HOME_DIR_PATH
+                        environment()["PREFIX"] = TERMUX_PREFIX_DIR_PATH
+                        environment()["PATH"] = "$TERMUX_PREFIX_DIR_PATH/bin"
+                        environment()["LD_LIBRARY_PATH"] = "$TERMUX_PREFIX_DIR_PATH/lib"
+                    }
+                    .start()
+                val output = process.inputStream.bufferedReader().readText()
+                val exitCode = process.waitFor()
+                if (exitCode != 0) {
+                    throw IllegalStateException("dpkg failed for $packageName ($exitCode): $output")
+                }
+                Logger.logInfo(LOG_TAG, "Installed verified package $packageName")
+            }
+            migrationMarker.parentFile?.mkdirs()
+            migrationMarker.writeText("2.5.0\n")
+        } catch (e: Exception) {
+            Logger.logStackTraceWithMessage(LOG_TAG, "Failed to install bundled essential packages", e)
+        } finally {
+            temporaryDirectory.deleteRecursively()
+        }
     }
     
     /**

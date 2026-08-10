@@ -11,6 +11,12 @@
     <uses-feature
         android:name="android.software.leanback"
         android:required="false" />
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.camera.flash"
+        android:required="false" />
 
     <permission
         android:name="${TERMUX_PACKAGE_NAME}.permission.RUN_COMMAND"
@@ -26,6 +32,7 @@
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:ignore="ScopedStorage" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -36,6 +43,8 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+    <!-- Required by the integrated torch action. -->
+    <uses-permission android:name="android.permission.CAMERA" />
 
     <application
         android:name=".app.TermuxApplication"
@@ -276,6 +285,37 @@
                 <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
             </intent-filter>
         </activity>
+
+        <!-- Device API Service — handles built-in Termux:API actions for terminal sessions -->
+        <service
+            android:name=".app.core.deviceapi.service.DeviceApiService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Built-in device API service for terminal session integration" />
+        </service>
+
+        <!-- Integrated X11/VNC desktop UI. Both activities are app-internal. -->
+        <activity
+            android:name=".app.x11.X11Activity"
+            android:configChanges="orientation|screenSize|keyboard|keyboardHidden"
+            android:exported="false"
+            android:hardwareAccelerated="true"
+            android:label="Desktop Environment"
+            android:screenOrientation="unspecified"
+            android:theme="@style/Theme.TermuxApp.DayNight.NoActionBar" />
+
+        <activity
+            android:name=".app.x11.X11LauncherActivity"
+            android:exported="false"
+            android:label="Desktop Launcher"
+            android:theme="@style/Theme.TermuxApp.DayNight.NoActionBar" />
+
+        <!-- Explicit broadcasts originate from the termux-api binary running under this app UID. -->
+        <receiver
+            android:name=".api.TermuxApiReceiver"
+            android:exported="false" />
 
         <!-- Widget RemoteViews Service for list widget -->
         <service
