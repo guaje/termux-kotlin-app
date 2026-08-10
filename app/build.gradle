@@ -272,7 +272,11 @@ static def resolveVersionFromTagOrEnv(String envVersionName, File rootDir) {
         def code = versionNameToVersionCode(clean)
         return [clean, code]
     }
-    throw new GradleException("No version source found. Set TERMUX_APP_VERSION_NAME or create a git tag like 'v2.5.0'.")
+    // Shallow PR checkouts may not contain tags. Non-release tasks still need valid
+    // Android metadata so lint, tests, dependency reports, and debug APKs can run.
+    // The task-graph guard above continues to reject every release build unless
+    // TERMUX_APP_VERSION_NAME is explicitly provided.
+    return ["0.0.0-alpha.1", versionNameToVersionCode("0.0.0-alpha.1")]
 }
 
 static def getLatestGitTag(File rootDir) {
