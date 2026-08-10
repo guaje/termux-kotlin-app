@@ -1,3 +1,15 @@
+## [2026-08-10] Build #3
+
+### Changes
+- 95d8f0a Merge pull request #1 from guaje/release/v2.5.0
+
+### Build Status
+- Prefix Validation: success
+- APK Build: success
+- Emulator Tests: skipped
+
+---
+
 ## [v2.5.0] - Unreleased
 
 ### Added
