@@ -10,6 +10,11 @@ on:
         description: 'Tag to release (for example, v2.5.0)'
         required: true
         type: string
+      publish:
+        description: 'Publish a GitHub release; false only uploads validated workflow artifacts.'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -72,7 +77,7 @@ jobs:
         run: ./gradlew --no-daemon lintDebug testDebugUnitTest
 
   build-release:
-    name: Build and publish signed APKs
+    name: Build signed APKs
     needs: lint-and-test
     runs-on: ubuntu-latest
     permissions:
@@ -197,6 +202,7 @@ jobs:
           EOF
 
       - name: Publish GitHub release
+        if: ${{ github.event_name == 'push' || inputs.publish }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
