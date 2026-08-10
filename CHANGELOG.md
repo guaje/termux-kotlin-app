@@ -1,3 +1,15 @@
+## [2026-08-10] Build #5
+
+### Changes
+- fa2d1b9 Merge pull request #2 from guaje/release/signed-candidate-workflow
+
+### Build Status
+- Prefix Validation: success
+- APK Build: success
+- Emulator Tests: skipped
+
+---
+
 ## [2026-08-10] Build #3
 
 ### Changes
