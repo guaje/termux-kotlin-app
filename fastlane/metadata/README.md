@@ -113,9 +113,11 @@ The app must build reproducibly. Key requirements:
 ### Updating for New Releases
 
 When releasing a new version:
-1. Update `versionCode` and `versionName` in `app/build.gradle`
-2. Add changelog: `fastlane/metadata/android/en-US/changelogs/<versionCode>.txt`
-3. Tag the release: `git tag v<version>`
-4. Push: `git push origin v<version>`
+1. Derive the deterministic version code with the formula documented in `app/build.gradle`.
+2. Add `fastlane/metadata/android/en-US/changelogs/<versionCode>.txt`.
+3. Tag the release as `v<version>` and push the tag, or dispatch `.github/workflows/release.yml` with that tag.
+4. Verify the workflow's APK metadata and signature checks pass before publishing.
+
+Do not hardcode `versionCode` or `versionName` in `app/build.gradle`; release builds receive the validated version from `TERMUX_APP_VERSION_NAME`.
 
 F-Droid will automatically pick up new versions if AutoUpdateMode is enabled.

@@ -57,6 +57,7 @@ class PermissionManager @Inject constructor(
         PermissionType.BATTERY_OPTIMIZATION -> checkBatteryOptimization()
         PermissionType.DISPLAY_OVERLAY -> checkOverlayPermission()
         PermissionType.EXTERNAL_STORAGE_MANAGE -> checkManageStoragePermission()
+        PermissionType.CAMERA -> checkCameraPermission()
     }
     
     /**
@@ -111,6 +112,14 @@ class PermissionManager @Inject constructor(
         } else {
             true
         }
+    }
+
+    // CAMERA permission check
+    private fun checkCameraPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
     }
     
     /**
@@ -226,6 +235,7 @@ class PermissionRequester(
                         handlePermissionResult(true)
                     }
                 }
+                PermissionType.CAMERA -> requestCameraPermission()
             }
             
             continuation.invokeOnCancellation {
@@ -311,6 +321,10 @@ class PermissionRequester(
         }
         settingsLauncher?.launch(intent)
     }
+
+    private fun requestCameraPermission() {
+        permissionLauncher?.launch(Manifest.permission.CAMERA)
+    }
     
     private fun getManifestPermission(permission: PermissionType): String? = when (permission) {
         PermissionType.STORAGE -> Manifest.permission.WRITE_EXTERNAL_STORAGE
@@ -320,6 +334,7 @@ class PermissionRequester(
         PermissionType.BATTERY_OPTIMIZATION -> null // Handled via settings
         PermissionType.DISPLAY_OVERLAY -> null // Handled via settings
         PermissionType.EXTERNAL_STORAGE_MANAGE -> null // Handled via settings
+        PermissionType.CAMERA -> Manifest.permission.CAMERA
     }
     
     override fun onDestroy(owner: LifecycleOwner) {

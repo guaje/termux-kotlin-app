@@ -1,89 +1,13 @@
-name: Attach Debug APKs To Release
-
+# DISABLED: This workflow has been retired in v2.5.0.
+# Release automation now lives entirely in release.yml, which builds and validates
+# signed release APKs only. Debug APKs are never attached to releases.
+#
+# Kept as a tombstone to prevent accidental restoration by merge.
+name: Disabled Attach Debug APKs
 on:
-  release:
-    types:
-      - published
-
+  workflow_dispatch:
 jobs:
-  attach-apks:
+  no-op:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      actions: write
-    strategy:
-      fail-fast: false
-      matrix:
-        package_variant: [ apt-android-7, apt-android-5 ]
-    env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
     steps:
-      - name: Clone repository
-        uses: actions/checkout@v6
-
-      - name: Setup Java 17
-        uses: actions/setup-java@v5
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: Build and attach APKs to release
-        shell: bash {0}
-        env:
-          PACKAGE_VARIANT: ${{ matrix.package_variant }}
-        run: |
-          exit_on_error() {
-              echo "$1"
-              echo "Deleting '$RELEASE_VERSION_NAME' release"
-              gh release delete "$RELEASE_VERSION_NAME" --yes || true
-              exit 1
-          }
-
-          echo "Setting vars"
-          RELEASE_VERSION_NAME="${GITHUB_REF/refs\/tags\//}"
-          if ! printf "%s" "${RELEASE_VERSION_NAME/v/}" | grep -qP '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$'; then
-           exit_on_error "The versionName '${RELEASE_VERSION_NAME/v/}' is not a valid version as per semantic version '2.0.0' spec in the format 'major.minor.patch(-prerelease)(+buildmetadata)'. https://semver.org/spec/v2.0.0.html."
-          fi
-
-          APK_DIR_PATH="./app/build/outputs/apk/debug"
-          APK_VERSION_TAG="$RELEASE_VERSION_NAME+$PACKAGE_VARIANT-github-debug"
-          APK_BASENAME_PREFIX="termux-app_$APK_VERSION_TAG"
-
-          echo "Building APKs for 'APK_VERSION_TAG' release"
-          export TERMUX_APK_VERSION_TAG="$APK_VERSION_TAG" # Used by app/build.gradle
-          export TERMUX_PACKAGE_VARIANT="$PACKAGE_VARIANT" # Used by app/build.gradle
-          if ! ./gradlew assembleDebug; then
-            exit_on_error "Build failed for '$APK_VERSION_TAG' release."
-          fi
-
-          echo "Validating APKs"
-          for abi in universal arm64-v8a armeabi-v7a x86_64 x86; do
-            if ! test -f "$APK_DIR_PATH/${APK_BASENAME_PREFIX}_$abi.apk"; then
-              files_found="$(ls "$APK_DIR_PATH")"
-              exit_on_error "Failed to find built APK at '$APK_DIR_PATH/${APK_BASENAME_PREFIX}_$abi.apk'. Files found: "$'\n'"$files_found"
-            fi
-          done
-
-          echo "Generating sha256sums file"
-          if ! (cd "$APK_DIR_PATH"; sha256sum \
-            "${APK_BASENAME_PREFIX}_universal.apk" \
-            "${APK_BASENAME_PREFIX}_arm64-v8a.apk" \
-            "${APK_BASENAME_PREFIX}_armeabi-v7a.apk" \
-            "${APK_BASENAME_PREFIX}_x86_64.apk" \
-            "${APK_BASENAME_PREFIX}_x86.apk" \
-            > "${APK_BASENAME_PREFIX}_sha256sums"); then
-            exit_on_error "Generate sha256sums failed for '$APK_VERSION_TAG' release."
-          fi
-
-          echo "Attaching APKs to github release"
-          if ! gh release upload "$RELEASE_VERSION_NAME" \
-          "$APK_DIR_PATH/${APK_BASENAME_PREFIX}_universal.apk" \
-          "$APK_DIR_PATH/${APK_BASENAME_PREFIX}_arm64-v8a.apk" \
-          "$APK_DIR_PATH/${APK_BASENAME_PREFIX}_armeabi-v7a.apk" \
-          "$APK_DIR_PATH/${APK_BASENAME_PREFIX}_x86_64.apk" \
-          "$APK_DIR_PATH/${APK_BASENAME_PREFIX}_x86.apk" \
-          "$APK_DIR_PATH/${APK_BASENAME_PREFIX}_sha256sums" \
-          --clobber; then
-            exit_on_error "Attach APKs to release failed for '$APK_VERSION_TAG' release."
-          fi
+      - run: echo "This workflow is disabled."

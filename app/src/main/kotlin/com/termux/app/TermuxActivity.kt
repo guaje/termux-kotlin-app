@@ -31,6 +31,7 @@ import com.termux.R
 import com.termux.app.activities.HelpActivity
 import com.termux.app.activities.SettingsActivity
 import com.termux.app.api.file.FileReceiverActivity
+import com.termux.app.x11.X11LauncherActivity
 import com.termux.app.terminal.TermuxActivityRootView
 import com.termux.app.terminal.TermuxSessionsListViewController
 import com.termux.app.terminal.TermuxTerminalSessionActivityClient
@@ -462,6 +463,11 @@ class TermuxActivity : AppCompatActivity(), ServiceConnection {
         settingsButton.setOnClickListener {
             ActivityUtils.startActivity(this, Intent(this, SettingsActivity::class.java))
         }
+
+        val desktopButton = findViewById<ImageButton>(R.id.desktop_button)
+        desktopButton.setOnClickListener {
+            ActivityUtils.startActivity(this, Intent(this, X11LauncherActivity::class.java))
+        }
     }
 
     private fun setNewSessionButtonView() {
@@ -552,6 +558,7 @@ class TermuxActivity : AppCompatActivity(), ServiceConnection {
         menu.findItem(CONTEXT_MENU_TOGGLE_KEEP_SCREEN_ON)?.isChecked = mPreferences?.shouldKeepScreenOn() == true
         menu.add(Menu.NONE, CONTEXT_MENU_HELP_ID, Menu.NONE, R.string.action_open_help)
         menu.add(Menu.NONE, CONTEXT_MENU_SETTINGS_ID, Menu.NONE, R.string.action_open_settings)
+        menu.add(Menu.NONE, CONTEXT_MENU_X11_VNC_ID, Menu.NONE, R.string.action_open_desktop)
         menu.add(Menu.NONE, CONTEXT_MENU_REPORT_ID, Menu.NONE, R.string.action_report_issue)
     }
 
@@ -607,6 +614,10 @@ class TermuxActivity : AppCompatActivity(), ServiceConnection {
             }
             CONTEXT_MENU_SETTINGS_ID -> {
                 ActivityUtils.startActivity(this, Intent(this, SettingsActivity::class.java))
+                true
+            }
+            CONTEXT_MENU_X11_VNC_ID -> {
+                ActivityUtils.startActivity(this, Intent(this, X11LauncherActivity::class.java))
                 true
             }
             CONTEXT_MENU_REPORT_ID -> {
@@ -873,6 +884,7 @@ class TermuxActivity : AppCompatActivity(), ServiceConnection {
         private const val CONTEXT_MENU_HELP_ID = 7
         private const val CONTEXT_MENU_SETTINGS_ID = 8
         private const val CONTEXT_MENU_REPORT_ID = 9
+        private const val CONTEXT_MENU_X11_VNC_ID = 12
 
         private const val ARG_TERMINAL_TOOLBAR_TEXT_INPUT = "terminal_toolbar_text_input"
         private const val ARG_ACTIVITY_RECREATED = "activity_recreated"
