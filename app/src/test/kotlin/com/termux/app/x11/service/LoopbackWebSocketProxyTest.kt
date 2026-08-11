@@ -267,7 +267,7 @@ class LoopbackWebSocketProxyTest {
                 readHttpResponse(client)
                 assertTrue(backend.accepted.await(SOCKET_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS))
                 // Close code 1005 is reserved/invalid
-                writeMaskedFrame(client, 8, byteArrayOf(0x03, 0xED))
+                writeMaskedFrame(client, 8, byteArrayOf(0x03, 0xED.toByte()))
                 val frame = readFrame(client)
                 assertEquals(8, frame.opcode)
                 assertEquals(2, frame.payload.size)
