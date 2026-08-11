@@ -1,3 +1,15 @@
+## [2026-08-11] Build #8
+
+### Changes
+- 5a99993 Merge pull request #3 from guaje/fix/release-certificate-validation
+
+### Build Status
+- Prefix Validation: success
+- APK Build: success
+- Emulator Tests: skipped
+
+---
+
 ## [2026-08-10] Build #5
 
 ### Changes
