@@ -170,9 +170,15 @@ jobs:
             fi
 
             VERIFY="$($APKSIGNER verify --verbose --print-certs "$apk")"
+            SIGNER_COUNT="$(awk -F ': ' '/^Number of signers:/ { print $2; exit }' <<< "$VERIFY")"
+            if [[ "$SIGNER_COUNT" != '1' ]]; then
+              echo "Expected exactly one signer in $apk, got '${SIGNER_COUNT:-unknown}'. apksigner output:" >&2
+              printf '%s\n' "$VERIFY" >&2
+              exit 1
+            fi
             CERT="$(
               awk '
-                /Signer #1 certificate SHA-256 digest:/ {
+                /certificate SHA-256 digest:/ {
                   digest = $0
                   sub(/^.*digest:[[:space:]]*/, "", digest)
                   gsub(/[[:space:]]/, "", digest)
