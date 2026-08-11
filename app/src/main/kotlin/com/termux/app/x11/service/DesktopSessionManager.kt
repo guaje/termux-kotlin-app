@@ -32,6 +32,7 @@ class DesktopSessionManager @Inject constructor(
     val installationProgress: StateFlow<InstallationProgress?> = _installationProgress.asStateFlow()
 
     private var currentDisplay: Int? = null
+    private var webSocketProxy: LoopbackWebSocketProxy? = null
 
     companion object {
         private const val TAG = "DesktopSessionManager"
@@ -118,6 +119,8 @@ class DesktopSessionManager @Inject constructor(
      * Start desktop session
      */
     suspend fun startDesktop(config: VncConfig = VncConfig()): Result<Unit> = withContext(Dispatchers.IO) {
+        var startedVnc = false
+        var startedProxy: LoopbackWebSocketProxy? = null
         try {
             require(config.display in 1..99) { "Display must be between 1 and 99" }
             require(config.port == 5900 + config.display) { "VNC port must match the selected display" }
@@ -149,6 +152,7 @@ class DesktopSessionManager @Inject constructor(
             if (result.exitCode != 0) {
                 throw Exception("VNC server failed: ${result.stderr}")
             }
+            startedVnc = true
 
             // Verify VNC server started
             delay(1000)
@@ -160,12 +164,44 @@ class DesktopSessionManager @Inject constructor(
                 throw Exception("VNC server failed to start - no PID file found")
             }
 
+            val proxy = LoopbackWebSocketProxy(
+                targetPort = config.port,
+                diagnostics = { message ->
+                    if (message == "Stopped" || message.startsWith("Listening")) {
+                        Logger.logInfo(TAG, "WebSocket bridge: $message")
+                    } else {
+                        Logger.logWarn(TAG, "WebSocket bridge: $message")
+                    }
+                }
+            )
+            startedProxy = proxy
+            proxy.start()
+            webSocketProxy = proxy
+            Logger.logInfo(
+                TAG,
+                "WebSocket bridge started on 127.0.0.1:${proxy.boundPort} -> 127.0.0.1:${config.port}"
+            )
+
             currentDisplay = config.display
             _sessionState.value = DesktopSessionState.Running(config.display, config.port)
 
-            Logger.logInfo(TAG, "Desktop started on display :${config.display}, port ${config.port}")
+            Logger.logInfo(TAG, "Desktop started on display :${config.display}, raw VNC port ${config.port}")
             Result.success(Unit)
         } catch (e: Exception) {
+            startedProxy?.close()
+            if (webSocketProxy === startedProxy) webSocketProxy = null
+            if (startedVnc) {
+                executeTermuxCommand(
+                    command = arrayOf(
+                        File(TermuxConstants.TERMUX_PREFIX_DIR_PATH, "bin/vncserver").absolutePath,
+                        "-kill",
+                        ":${config.display}"
+                    ),
+                    workingDir = File(TermuxConstants.TERMUX_HOME_DIR_PATH),
+                    ignoreErrors = true
+                )
+            }
+            currentDisplay = null
             Logger.logError(TAG, "Failed to start desktop: ${e.message}")
             _sessionState.value = DesktopSessionState.Error("Failed to start: ${e.message}", e)
             Result.failure(e)
@@ -179,6 +215,11 @@ class DesktopSessionManager @Inject constructor(
         try {
             val targetDisplay = display ?: currentDisplay ?: 1
             _sessionState.value = DesktopSessionState.Stopping(targetDisplay)
+            webSocketProxy?.let { proxy ->
+                Logger.logInfo(TAG, "Stopping WebSocket bridge on 127.0.0.1:${proxy.boundPort}")
+                proxy.close()
+            }
+            webSocketProxy = null
 
             executeTermuxCommand(
                 command = arrayOf(
