@@ -1,3 +1,15 @@
+## [2026-08-11] Build #12
+
+### Changes
+- 52306e7 Merge pull request #5 from guaje/fix/x11-websocket-proxy
+
+### Build Status
+- Prefix Validation: success
+- APK Build: success
+- Emulator Tests: skipped
+
+---
+
 ## [2026-08-11] Build #10
 
 ### Changes
