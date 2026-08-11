@@ -22,6 +22,7 @@ permissions:
 env:
   JAVA_VERSION: '17'
   RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  RELEASE_CERTIFICATE_SHA256: 'b71c8ff3ce3ce4cb55efd20b34048329721d40fcec540f2cbc9cfb4ee5fb2d63'
   TERMUX_SPLIT_APKS_FOR_RELEASE_BUILDS: '1'
 
 jobs:
@@ -169,8 +170,26 @@ jobs:
             fi
 
             VERIFY="$($APKSIGNER verify --verbose --print-certs "$apk")"
-            CERT="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' <<< "$VERIFY" | head -n 1)"
-            [[ -n "$CERT" ]] || { echo "Could not read signing certificate from $apk" >&2; exit 1; }
+            CERT="$(
+              awk '
+                /Signer #1 certificate SHA-256 digest:/ {
+                  digest = $0
+                  sub(/^.*digest:[[:space:]]*/, "", digest)
+                  gsub(/[[:space:]]/, "", digest)
+                  print tolower(digest)
+                  exit
+                }
+              ' <<< "$VERIFY"
+            )"
+            if [[ ! "$CERT" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "Could not read signing certificate from $apk. apksigner output:" >&2
+              printf '%s\n' "$VERIFY" >&2
+              exit 1
+            fi
+            if [[ "$CERT" != "$RELEASE_CERTIFICATE_SHA256" ]]; then
+              echo "Unexpected signing certificate in $apk: expected $RELEASE_CERTIFICATE_SHA256, got $CERT" >&2
+              exit 1
+            fi
             if [[ -z "$EXPECTED_CERT" ]]; then
               EXPECTED_CERT="$CERT"
             elif [[ "$CERT" != "$EXPECTED_CERT" ]]; then
