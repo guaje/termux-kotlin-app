@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.termux.app.x11.X11Activity
 import com.termux.app.x11.models.*
+import com.termux.app.x11.service.LoopbackWebSocketProxy
 
 @Composable
 fun DesktopLauncherScreen(
@@ -497,7 +498,9 @@ private fun DesktopControlScreen(
                 }
                 is DesktopSessionState.Running -> {
                     LaunchButton(
-                        onClick = { onLaunch(sessionState.display, sessionState.port) }
+                        onClick = {
+                            onLaunch(sessionState.display, LoopbackWebSocketProxy.DEFAULT_PORT)
+                        }
                     )
                     StopButton(onClick = onStop)
                 }

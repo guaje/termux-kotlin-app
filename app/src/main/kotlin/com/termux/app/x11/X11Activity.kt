@@ -13,6 +13,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.termux.BuildConfig
 import androidx.activity.ComponentActivity
+import androidx.webkit.WebViewAssetLoader
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -27,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.termux.app.x11.models.DesktopSessionState
+import com.termux.app.x11.service.LoopbackWebSocketProxy
 import com.termux.app.x11.ui.DesktopViewModel
 import com.termux.app.ui.compose.theme.TermuxTheme
 import com.termux.shared.logger.Logger
@@ -45,7 +47,9 @@ class X11Activity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         val display = intent.getIntExtra(EXTRA_DISPLAY, 1)
-        val port = intent.getIntExtra(EXTRA_PORT, 5901)
+        val port = intent.getIntExtra(EXTRA_PORT, LoopbackWebSocketProxy.DEFAULT_PORT)
+            .takeIf { it == LoopbackWebSocketProxy.DEFAULT_PORT }
+            ?: LoopbackWebSocketProxy.DEFAULT_PORT
 
         setContent {
             TermuxTheme {
@@ -150,18 +154,24 @@ private fun VncWebView(
     port: Int,
     modifier: Modifier = Modifier
 ) {
-    val validatedPort = port.takeIf { it in 5900..65535 } ?: 5901
+    val bridgePort = port.takeIf { it == LoopbackWebSocketProxy.DEFAULT_PORT }
+        ?: LoopbackWebSocketProxy.DEFAULT_PORT
     AndroidView(
         factory = { context ->
+            val assetLoader = WebViewAssetLoader.Builder()
+                .setDomain("localhost")
+                .setHttpAllowed(true)
+                .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(context))
+                .build()
             WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
             WebView(context).apply {
                 settings.apply {
                     javaScriptEnabled = true // Required by the bundled noVNC client.
                     domStorageEnabled = true
                     databaseEnabled = false
-                    allowFileAccess = true
+                    allowFileAccess = false
                     allowContentAccess = false
-                    allowFileAccessFromFileURLs = true // Required for noVNC ES modules.
+                    allowFileAccessFromFileURLs = false
                     allowUniversalAccessFromFileURLs = false
                     mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                     cacheMode = WebSettings.LOAD_NO_CACHE
@@ -174,15 +184,16 @@ private fun VncWebView(
 
                 webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                        return !request.url.toString().startsWith("file:///android_asset/novnc/")
+                        return !request.url.toString().startsWith(LOCAL_ASSET_PREFIX)
                     }
 
                     override fun shouldInterceptRequest(
                         view: WebView,
                         request: WebResourceRequest
                     ): WebResourceResponse? {
+                        assetLoader.shouldInterceptRequest(request.url)?.let { return it }
                         val url = request.url.toString()
-                        if (url.startsWith("http://") || url.startsWith("https://")) {
+                        if (request.url.scheme == "http" || request.url.scheme == "https") {
                             Logger.logWarn("X11Activity", "Blocked external noVNC request: $url")
                             return WebResourceResponse(
                                 "text/plain",
@@ -213,15 +224,15 @@ private fun VncWebView(
                     }
                 }
 
-                loadUrl(
-                    "file:///android_asset/novnc/vnc.html" +
-                        "?host=127.0.0.1&port=$validatedPort&autoconnect=true&resize=scale"
-                )
+                check(bridgePort == LoopbackWebSocketProxy.DEFAULT_PORT)
+                loadUrl("${LOCAL_ASSET_PREFIX}termux_vnc.html?autoconnect=true")
             }
         },
         modifier = modifier
     )
 }
+
+private const val LOCAL_ASSET_PREFIX = "http://localhost/assets/novnc/"
 
 @Composable
 private fun LoadingScreen(message: String) {

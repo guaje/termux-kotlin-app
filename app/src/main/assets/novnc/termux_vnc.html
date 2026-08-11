@@ -84,10 +84,8 @@
         let rfb;
         let desktopName;
 
-        // Parse URL parameters
+        // Only password and autoconnect are configurable. The loopback bridge endpoint is fixed.
         const urlParams = new URLSearchParams(window.location.search);
-        const host = urlParams.get('host') || 'localhost';
-        const port = urlParams.get('port') || '5901';
         const password = urlParams.get('password') || '';
         const autoconnect = urlParams.get('autoconnect') !== 'false';
 
@@ -128,7 +126,7 @@
 
         function connect() {
             try {
-                const url = `ws://${host}:${port}`;
+                const url = 'ws://localhost:6080/websockify';
                 console.log('Connecting to ' + url);
 
                 rfb = new RFB(document.getElementById('screen'), url, {
