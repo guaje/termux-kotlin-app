@@ -1,3 +1,15 @@
+## [2026-08-11] Build #10
+
+### Changes
+- 508699e Merge pull request #4 from guaje/fix/apksigner-v2-output
+
+### Build Status
+- Prefix Validation: success
+- APK Build: success
+- Emulator Tests: skipped
+
+---
+
 ## [2026-08-11] Build #8
 
 ### Changes
