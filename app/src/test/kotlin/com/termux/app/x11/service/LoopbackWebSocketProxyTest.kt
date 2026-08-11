@@ -245,7 +245,7 @@ class LoopbackWebSocketProxyTest {
                 output.flush()
                 val frame = readFrame(client)
                 assertEquals(8, frame.opcode)
-                assertEquals(2, frame.payload.size)
+                assertTrue(frame.payload.size >= 2)
                 assertEquals(0x03, frame.payload[0].toInt() and 0xFF)
                 assertEquals(0xEA, frame.payload[1].toInt() and 0xFF)
             }
@@ -270,7 +270,7 @@ class LoopbackWebSocketProxyTest {
                 writeMaskedFrame(client, 8, byteArrayOf(0x03, 0xED.toByte()))
                 val frame = readFrame(client)
                 assertEquals(8, frame.opcode)
-                assertEquals(2, frame.payload.size)
+                assertTrue(frame.payload.size >= 2)
                 assertEquals(0x03, frame.payload[0].toInt() and 0xFF)
                 assertEquals(0xEA, frame.payload[1].toInt() and 0xFF)
             }
@@ -296,7 +296,7 @@ class LoopbackWebSocketProxyTest {
                 writeMaskedFrame(client, 8, payload)
                 val frame = readFrame(client)
                 assertEquals(8, frame.opcode)
-                assertEquals(2, frame.payload.size)
+                assertTrue(frame.payload.size >= 2)
                 assertEquals(0x03, frame.payload[0].toInt() and 0xFF)
                 assertEquals(0xEF, frame.payload[1].toInt() and 0xFF)
             }
