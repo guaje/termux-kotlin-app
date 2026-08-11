@@ -18,7 +18,8 @@ Fully functional X11 desktop environment integration with noVNC-based VNC viewer
   - Quality/compression settings
   - Error handling UI
   - Loading states
-- **WebView integration** in X11Activity to display desktop
+- **WebView integration** in X11Activity to display desktop. Bundled viewer assets are served through `WebViewAssetLoader` at `http://localhost/assets/novnc/`, not `file://` URLs.
+- **Loopback WebSocket bridge** from noVNC at `ws://localhost:6080/websockify` to TigerVNC raw RFB at `127.0.0.1:5901`. Both listeners are loopback-only.
 
 ### 2. **Desktop Environment (XFCE4)** ✅
 - **Installation script** (`install-desktop.sh`):
@@ -99,7 +100,8 @@ app/
 │   │   ├── models/
 │   │   │   └── DesktopModels.kt    # All data models
 │   │   ├── service/
-│   │   │   └── DesktopSessionManager.kt  # Core logic
+│   │   │   ├── DesktopSessionManager.kt  # VNC and bridge lifecycle
+│   │   │   └── LoopbackWebSocketProxy.kt # Loopback noVNC WebSocket-to-RFB bridge
 │   │   ├── ui/
 │   │   │   ├── DesktopViewModel.kt
 │   │   │   └── DesktopLauncherScreen.kt
@@ -112,7 +114,8 @@ app/
 │   │   └── values/
 │   │       └── strings.xml          # Added desktop strings
 │   │
-│   └── AndroidManifest.xml         # Registered activities
+│   ├── res/xml/network_security_config.xml # Cleartext limited to localhost
+│   └── AndroidManifest.xml         # Registered activities and network security config
 │
 ├── build.gradle                     # Added webkit dependency
 └── docs/
@@ -150,8 +153,9 @@ app/
 6. Status shows "Running on :1"
 7. Taps "Open Desktop Viewer"
 8. X11Activity opens in full screen
-9. noVNC connects to localhost:5901
-10. XFCE4 desktop appears!
+9. noVNC connects to `ws://localhost:6080/websockify`
+10. The in-app loopback bridge forwards to raw TigerVNC at `127.0.0.1:5901`
+11. XFCE4 desktop appears!
 ```
 
 ### **Using Desktop**
@@ -175,12 +179,22 @@ app/
 ```bash
 Default settings:
 - Display: :1
-- Port: 5901
+- Raw RFB port: 5901 (for external/manual VNC clients on loopback)
+- noVNC WebSocket port: 6080 at `ws://localhost:6080/websockify`
 - Resolution: 1280x720
 - Color depth: 24-bit
 - DPI: 96
 - Localhost only: Yes (secure)
 - Security: None (localhost is safe)
+```
+
+### **Viewer Network Path**
+```
+WebViewAssetLoader http://localhost/assets/novnc/termux_vnc.html
+    │
+    └── noVNC ws://localhost:6080/websockify
+            │  (in-app loopback-only WebSocket bridge)
+            └── TigerVNC raw RFB 127.0.0.1:5901 (loopback-only)
 ```
 
 ### **Desktop Components Installed**
@@ -217,6 +231,7 @@ vncserver :1             # Start
 vncserver -kill :1       # Stop
 vncserver -list          # List all
 ```
+`start-desktop` launches TigerVNC's raw loopback RFB listener on port 5901. The app viewer uses the separate in-app WebSocket bridge on port 6080; external/manual loopback VNC clients continue to use raw port 5901.
 
 ### **Performance Expectations**
 - **Startup time**: 5-10 seconds for desktop
@@ -276,6 +291,7 @@ class DesktopSessionManager @Inject constructor(
 
 ### ✅ **Build Integration**
 - [x] noVNC bundled in assets
+- [x] JVM WebSocket bridge tests cover handshake, binary forwarding, protocol rejection, and listener shutdown
 - [x] Installation script bundled
 - [x] Webkit dependency added
 - [x] Activities registered in manifest
@@ -291,7 +307,9 @@ class DesktopSessionManager @Inject constructor(
 
 ### 🔲 **Runtime Testing**
 - [ ] Start VNC server successfully
-- [ ] noVNC connects to localhost:5901
+- [ ] noVNC connects to `ws://localhost:6080/websockify` and renders the loopback TigerVNC session at `127.0.0.1:5901`
+- [ ] WebSocket bridge rejects unmasked/oversized frames and stops with the desktop session
+- [ ] WebView serves only `http://localhost/assets/novnc/` assets and blocks other HTTP(S) requests
 - [ ] XFCE4 desktop appears
 - [ ] Touch input works
 - [ ] Keyboard input works
