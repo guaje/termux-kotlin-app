@@ -1,3 +1,15 @@
+## [2026-08-11] Build #14
+
+### Changes
+- 26ba688 Merge pull request #6 from guaje/fix/x11-proxy-test-compile
+
+### Build Status
+- Prefix Validation: success
+- APK Build: success
+- Emulator Tests: skipped
+
+---
+
 ## [2026-08-11] Build #12
 
 ### Changes
