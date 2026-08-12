@@ -1,3 +1,15 @@
+## [2026-08-12] Build #21
+
+### Changes
+- 06541d5 fix: unblock desktop install and viewer (#9)
+
+### Build Status
+- Prefix Validation: success
+- APK Build: success
+- Emulator Tests: skipped
+
+---
+
 ## [2026-08-12] Build #19
 
 ### Changes
