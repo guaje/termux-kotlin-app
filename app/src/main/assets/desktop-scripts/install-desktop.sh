@@ -8,6 +8,15 @@ DESKTOP_ENV="${1:-xfce4}"
 INSTALL_APPS="${2:-true}"
 INSTALL_FONTS="${3:-true}"
 
+# Package operations run without a terminal. Prevent dpkg configuration-file
+# prompts from blocking the in-app installer indefinitely.
+export DEBIAN_FRONTEND=noninteractive
+readonly -a APT_OPTIONS=(
+    -y
+    -o Dpkg::Options::=--force-confdef
+    -o Dpkg::Options::=--force-confold
+)
+
 echo "====================================="
 echo "Termux Desktop Environment Installer"
 echo "====================================="
@@ -16,42 +25,48 @@ echo "Apps: $INSTALL_APPS"
 echo "Fonts: $INSTALL_FONTS"
 echo "====================================="
 
+# Recover cleanly if a prior installation was interrupted (for example, if the
+# app was stopped while dpkg was configuring an upgraded bootstrap package).
+echo "→ Checking package manager state..."
+dpkg --force-confdef --force-confold --configure -a
+apt --fix-broken install "${APT_OPTIONS[@]}"
+
 # Update package lists
 echo "→ Updating package lists..."
-apt update -y
+apt update "${APT_OPTIONS[@]}"
 
 # Upgrade existing packages
 echo "→ Upgrading packages..."
-apt upgrade -y
+apt upgrade "${APT_OPTIONS[@]}"
 
 # Install X11 repository
 echo "→ Installing X11 repository..."
-apt install -y x11-repo
+apt install "${APT_OPTIONS[@]}" x11-repo
 
 # Update again with X11 repo
-apt update -y
+apt update "${APT_OPTIONS[@]}"
 
 # Install VNC server and dependencies
 echo "→ Installing VNC server..."
-apt install -y tigervnc dbus
+apt install "${APT_OPTIONS[@]}" tigervnc dbus
 
 # Install desktop environment
 echo "→ Installing desktop environment: $DESKTOP_ENV..."
 case "$DESKTOP_ENV" in
     xfce4)
-        apt install -y xfce4 xfce4-terminal xfce4-settings xfce4-goodies
+        apt install "${APT_OPTIONS[@]}" xfce4 xfce4-terminal xfce4-settings xfce4-goodies
         ;;
     lxqt)
-        apt install -y lxqt
+        apt install "${APT_OPTIONS[@]}" lxqt
         ;;
     lxde)
-        apt install -y lxde
+        apt install "${APT_OPTIONS[@]}" lxde
         ;;
     fluxbox)
-        apt install -y fluxbox
+        apt install "${APT_OPTIONS[@]}" fluxbox
         ;;
     openbox)
-        apt install -y openbox
+        apt install "${APT_OPTIONS[@]}" openbox
         ;;
     *)
         echo "Unknown desktop environment: $DESKTOP_ENV"
@@ -62,7 +77,7 @@ esac
 # Install additional applications
 if [ "$INSTALL_APPS" = "true" ]; then
     echo "→ Installing applications..."
-    apt install -y \
+    apt install "${APT_OPTIONS[@]}" \
         firefox \
         mousepad \
         thunar \
@@ -77,7 +92,7 @@ fi
 # Install fonts
 if [ "$INSTALL_FONTS" = "true" ]; then
     echo "→ Installing fonts..."
-    apt install -y fonts-noto fonts-noto-cjk || true
+    apt install "${APT_OPTIONS[@]}" fonts-noto fonts-noto-cjk || true
 fi
 
 # Create VNC directory

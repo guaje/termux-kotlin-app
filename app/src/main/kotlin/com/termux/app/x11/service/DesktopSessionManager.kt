@@ -293,6 +293,9 @@ class DesktopSessionManager @Inject constructor(
             env["TMPDIR"] = "${TermuxConstants.TERMUX_PREFIX_DIR_PATH}/tmp"
 
             val process = processBuilder.start()
+            // Commands launched here never consume interactive input. Closing the
+            // pipe ensures an unexpected prompt receives EOF instead of hanging.
+            process.outputStream.close()
 
             val stdout = StringBuilder()
             val stderr = StringBuilder()

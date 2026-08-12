@@ -162,11 +162,24 @@ async function _checkWebCodecsH264DecodeSupport() {
     decoder.configure(config);
     decoder.decode(chunk);
     try {
-        await decoder.flush();
+        // Some Android WebView implementations never settle flush() for this
+        // synthetic probe. Bound the check so importing noVNC cannot hang.
+        const flushPromise = decoder.flush();
+        // If the timeout wins, closing the decoder can reject flushPromise
+        // later. Keep that rejection handled as well.
+        flushPromise.catch(() => {});
+        await Promise.race([
+            flushPromise,
+            new Promise((_, reject) => {
+                setTimeout(() => reject(new Error('WebCodecs probe timed out')), 1000);
+            }),
+        ]);
     } catch (e) {
-        // Firefox incorrectly throws an exception here
-        // https://bugzilla.mozilla.org/show_bug.cgi?id=1932566
+        // Firefox can throw here, and Android WebView can time out.
+        // In either case, disable H.264 and use noVNC's other encodings.
         error = e;
+    } finally {
+        decoder.close();
     }
 
     // Firefox fails to deliver the error on Windows, so we need to

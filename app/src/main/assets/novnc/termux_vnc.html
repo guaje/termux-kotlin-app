@@ -156,9 +156,14 @@
             }
         }
 
-        // Auto-connect on load
+        // Auto-connect on load. Module initialization can be delayed by noVNC's
+        // capability probes, so the load event may already have fired.
         if (autoconnect) {
-            window.addEventListener('load', connect);
+            if (document.readyState === 'complete') {
+                connect();
+            } else {
+                window.addEventListener('load', connect, { once: true });
+            }
         }
 
         // Expose functions for Android WebView interaction
