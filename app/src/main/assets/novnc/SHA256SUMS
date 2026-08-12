@@ -100,7 +100,7 @@ c04b67fdae6ac061c7d51cb5ee8ca296ee9c7c80aa246cee5751e74eefe61758  ./core/input/g
 f0fc982627e1c02feaac1bd50d7fdd3bcbb05f0062b910d8002f47d1b08967a6  ./core/input/xtscancodes.js
 4aeffb60af9c163365170e2af392acb6f0a7c21a0cb6827f85dd776d33277bee  ./core/ra2.js
 c9453d7d20ad92c684b3f11e2075abb7b5e71e174edae7abf5f89d4b14e8ecb7  ./core/rfb.js
-be6e0a6f5f43c1fc7678202681b78462326bd7c5cf0af35c921d4f3a2c05c9b0  ./core/util/browser.js
+a795fc11bd58cbd11311f7479eec5e0b2047115ed0353ae2a41bea9124f9a598  ./core/util/browser.js
 adabe605d73f38e5f29abd302489d4b9e98a9e495823a06a2edbe7f6744856fa  ./core/util/cursor.js
 13845321fc5abccc1de25594082d8db15405af56c5f4fc32b3bdd0878bd891e3  ./core/util/element.js
 ec7f4da0407ea67f5d6f5ce53bd9b3342155feb9407707de3992c5261e460ead  ./core/util/events.js
@@ -112,7 +112,7 @@ d1a96fc1316eaab9badcba9b0f1a7a55d748a4d4d26dc0263cc179dba2131cf4  ./core/websock
 ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356  ./defaults.json
 3ccd2242d7f5b6c5ae831a486f63cce1f18d8cd11c511f6a7a7251673763b2d1  ./LICENSE.txt
 ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356  ./mandatory.json
-de9c513558e6a317130f48b456cfdb0e229ddb1cf71f93f72ffb2620d9b8cbc7  ./termux_vnc.html
+fa2b1fb3c3c9740d8554355de0a418eb5ee0ddc3783ec4b1ca4e02bc7970d5d0  ./termux_vnc.html
 0749bc4661ed186714b90e7f2321c9625a8ce7c680563bfe3ac6df7aa332bf28  ./vendor/pako/lib/utils/common.js
 7412dd3ecc015888b99292f45e4d4ba69abc77f208508c9a1c93e8dfe54ba6cd  ./vendor/pako/lib/zlib/adler32.js
 9d2c0dd36349e6eec9d41a37f965b2ff7e7374fbf00fb139e3116d428b551898  ./vendor/pako/lib/zlib/constants.js
