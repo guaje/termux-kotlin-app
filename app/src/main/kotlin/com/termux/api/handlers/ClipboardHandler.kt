@@ -19,15 +19,18 @@ import java.io.PrintWriter
  */
 object ClipboardHandler {
 
-    fun onReceive(receiver: BroadcastReceiver, context: Context, intent: Intent) {
-        val isSet = intent.getBooleanExtra("api_set", false)
+    private const val EXTRA_SET = "set"
 
-        if (isSet) {
+    fun onReceive(receiver: BroadcastReceiver, context: Context, intent: Intent) {
+        if (isSetRequest(intent)) {
             handleClipboardSet(receiver, context, intent)
         } else {
             handleClipboardGet(receiver, context, intent)
         }
     }
+
+    internal fun isSetRequest(intent: Intent): Boolean =
+        intent.getBooleanExtra(EXTRA_SET, false)
 
     private fun handleClipboardGet(receiver: BroadcastReceiver, context: Context, intent: Intent) {
         ResultReturner.returnData(receiver, intent, ResultReturner.ResultWriter { out ->
