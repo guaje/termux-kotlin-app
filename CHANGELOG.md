@@ -1,3 +1,15 @@
+## [2026-08-12] Build #23
+
+### Changes
+- 2fa6d45 fix: protect integrated Termux API package (#10)
+
+### Build Status
+- Prefix Validation: success
+- APK Build: success
+- Emulator Tests: skipped
+
+---
+
 ## [2026-08-12] Build #21
 
 ### Changes
