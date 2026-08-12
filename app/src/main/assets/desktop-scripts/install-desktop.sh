@@ -17,6 +17,8 @@ readonly -a APT_OPTIONS=(
     -o Dpkg::Options::=--force-confold
 )
 
+apt-mark hold termux-api
+
 echo "====================================="
 echo "Termux Desktop Environment Installer"
 echo "====================================="

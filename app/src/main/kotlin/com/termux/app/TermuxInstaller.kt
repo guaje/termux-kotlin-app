@@ -421,7 +421,7 @@ object TermuxInstaller {
 
     /** Install bundled packages only after validating their recorded SHA-256 digests. */
     private fun installEssentialPackages(activity: Activity) {
-        val migrationMarker = File(TERMUX_PREFIX_DIR_PATH, "var/lib/termux-kotlin/essential-packages-v2.5.0")
+        val migrationMarker = File(TERMUX_PREFIX_DIR_PATH, "var/lib/termux-kotlin/essential-packages-v2.5.0-api-epoch")
         if (migrationMarker.isFile) return
 
         val architecture = when (Build.SUPPORTED_ABIS.firstOrNull()) {
@@ -435,7 +435,7 @@ object TermuxInstaller {
             }
         }
         val packageNames = listOf(
-            "termux-api_0.59.1-1_${architecture}.deb",
+            "termux-api_1%3a0.59.1-1_${architecture}.deb",
             "util-linux_2.41.2-1_${architecture}.deb"
         )
         val checksums = activity.assets.open("bootstrap-packages/sha256sums.txt")
@@ -497,8 +497,28 @@ object TermuxInstaller {
                 }
                 Logger.logInfo(LOG_TAG, "Installed verified package $packageName")
             }
+            val aptMark = File(TERMUX_PREFIX_DIR_PATH, "bin/apt-mark")
+            if (!aptMark.canExecute()) {
+                throw IllegalStateException("apt-mark is unavailable; cannot hold termux-api")
+            }
+            val process = ProcessBuilder(aptMark.absolutePath, "hold", "termux-api")
+                .directory(TERMUX_PREFIX_DIR)
+                .redirectErrorStream(true)
+                .apply {
+                    environment()["HOME"] = TermuxConstants.TERMUX_HOME_DIR_PATH
+                    environment()["PREFIX"] = TERMUX_PREFIX_DIR_PATH
+                    environment()["PATH"] = "$TERMUX_PREFIX_DIR_PATH/bin"
+                    environment()["LD_LIBRARY_PATH"] = "$TERMUX_PREFIX_DIR_PATH/lib"
+                }
+                .start()
+            val output = process.inputStream.bufferedReader().readText()
+            val exitCode = process.waitFor()
+            if (exitCode != 0) {
+                throw IllegalStateException("apt-mark failed to hold termux-api ($exitCode): $output")
+            }
+
             migrationMarker.parentFile?.mkdirs()
-            migrationMarker.writeText("2.5.0\n")
+            migrationMarker.writeText("2.5.0-api-epoch\n")
         } catch (e: Exception) {
             Logger.logStackTraceWithMessage(LOG_TAG, "Failed to install bundled essential packages", e)
         } finally {
