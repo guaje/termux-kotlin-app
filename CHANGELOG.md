@@ -1,3 +1,15 @@
+## [2026-08-13] Build #28
+
+### Changes
+- 23a64a4 Fix integrated Termux:Styling fonts (#12)
+
+### Build Status
+- Prefix Validation: success
+- APK Build: success
+- Emulator Tests: skipped
+
+---
+
 ## [2026-08-13] Build #26
 
 ### Changes
