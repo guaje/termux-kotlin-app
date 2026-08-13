@@ -18,6 +18,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -33,13 +35,23 @@ private val Context.stylingDataStore: DataStore<Preferences> by preferencesDataS
 @Singleton
 class StylingManager @Inject constructor(
     private val context: Context,
-    private val fontManager: FontManager
+    private val fontManager: FontManager,
+    private val nerdFontDownloader: NerdFontDownloadClient
 ) {
     internal constructor(
         context: Context,
         fontManager: FontManager,
         dataStore: DataStore<Preferences>
-    ) : this(context, fontManager) {
+    ) : this(context, fontManager, NerdFontDownloader(context, HttpNerdFontArchiveProvider())) {
+        this.dataStore = dataStore
+    }
+
+    internal constructor(
+        context: Context,
+        fontManager: FontManager,
+        dataStore: DataStore<Preferences>,
+        nerdFontDownloader: NerdFontDownloadClient
+    ) : this(context, fontManager, nerdFontDownloader) {
         this.dataStore = dataStore
     }
     companion object {
@@ -66,6 +78,7 @@ class StylingManager @Inject constructor(
     private var currentScheme: ColorScheme = BuiltInColorSchemes.Default
     private var currentFont: Typeface = Typeface.MONOSPACE
     private val styleChangeListeners = mutableListOf<StyleChangeListener>()
+    private val optionalFontMutex = Mutex()
 
     interface StyleChangeListener {
         fun onColorSchemeChanged(scheme: ColorScheme)
@@ -186,6 +199,85 @@ class StylingManager @Inject constructor(
             Logger.logInfo(LOG_TAG, "Font changed to: $name")
         }
         return result
+    }
+
+    /** Downloads, validates, atomically installs, applies, and persists a pinned optional font. */
+    suspend fun downloadInstallAndApplyNerdFont(id: String): OptionalFontResult = optionalFontMutex.withLock {
+        val entry = NerdFontCatalog.find(id)
+            ?: return@withLock OptionalFontResult.Error("That optional Nerd Font is not in the pinned catalog")
+        if (!entry.primaryFontSupported) {
+            return@withLock OptionalFontResult.Error(
+                "${entry.family} is symbols-only and cannot be the terminal primary font"
+            )
+        }
+        // A second concurrent request observes the first request's completed installation rather
+        // than downloading the same archive again.
+        if (!fontManager.isInstalledFont(entry.storageName)) {
+            val downloaded = nerdFontDownloader.download(entry).getOrElse {
+                return@withLock OptionalFontResult.Error(it.message ?: "Download failed; please try again")
+            }
+            downloaded.use { font ->
+                val installed = withContext(Dispatchers.IO) {
+                    fontManager.installFont(font.file, entry.storageName, font.extension)
+                }
+                if (!installed) {
+                    return@withLock OptionalFontResult.Error(
+                        "Downloaded font could not be validated or installed; please try again"
+                    )
+                }
+            }
+        }
+        when (val result = setFont(entry.storageName)) {
+            is FontManager.ApplyResult.Success -> OptionalFontResult.Success(entry.storageName)
+            is FontManager.ApplyResult.Error -> OptionalFontResult.Error(result.message)
+        }
+    }
+
+    /** Applies an installed optional font under the same lock used for download and removal. */
+    suspend fun applyNerdFont(id: String): OptionalFontResult = optionalFontMutex.withLock {
+        val entry = NerdFontCatalog.find(id)
+            ?: return@withLock OptionalFontResult.Error("That optional Nerd Font is not in the pinned catalog")
+        if (!fontManager.isInstalledFont(entry.storageName)) {
+            return@withLock OptionalFontResult.Error("${entry.family} is not installed")
+        }
+        when (val result = setFont(entry.storageName)) {
+            is FontManager.ApplyResult.Success -> OptionalFontResult.Success(entry.storageName)
+            is FontManager.ApplyResult.Error -> OptionalFontResult.Error(result.message)
+        }
+    }
+
+    /** Resets first when necessary so a persisted selection never points at a removed file. */
+    suspend fun removeNerdFont(id: String): OptionalFontResult = optionalFontMutex.withLock {
+        val entry = NerdFontCatalog.find(id)
+            ?: return@withLock OptionalFontResult.Error("That optional Nerd Font is not in the pinned catalog")
+        if (!fontManager.isInstalledFont(entry.storageName)) {
+            return@withLock OptionalFontResult.Success(entry.storageName)
+        }
+        if (fontManager.getCurrentFontName() == entry.storageName) {
+            when (val reset = setFont("default")) {
+                is FontManager.ApplyResult.Error -> return@withLock OptionalFontResult.Error(reset.message)
+                is FontManager.ApplyResult.Success -> Unit
+            }
+        }
+        if (withContext(Dispatchers.IO) { fontManager.removeFont(entry.storageName) }) {
+            OptionalFontResult.Success(entry.storageName)
+        } else {
+            OptionalFontResult.Error("Unable to remove ${entry.family}; please try again")
+        }
+    }
+
+    /** Builds all optional-font statuses with one directory scan, off the UI thread. */
+    suspend fun getNerdFontStatuses(): Map<String, NerdFontStatus> = optionalFontMutex.withLock {
+        val installed = withContext(Dispatchers.IO) { fontManager.getInstalledNerdFontNames() }
+        val selected = fontManager.getCurrentFontName()
+        NerdFontCatalog.optionalEntries.associate { entry ->
+            entry.id to when {
+                !entry.primaryFontSupported -> NerdFontStatus.Unsupported
+                selected == entry.storageName -> NerdFontStatus.Selected
+                entry.storageName in installed -> NerdFontStatus.Installed
+                else -> NerdFontStatus.Downloadable
+            }
+        }
     }
 
     /** Stores Styling's selected size in sp and Termux's canonical size in rounded px. */
@@ -320,6 +412,13 @@ class StylingManager @Inject constructor(
 
     fun getAvailableFonts(): List<FontManager.FontInfo> = fontManager.getAvailableFonts()
 }
+
+sealed class OptionalFontResult {
+    data class Success(val storageName: String) : OptionalFontResult()
+    data class Error(val message: String) : OptionalFontResult()
+}
+
+enum class NerdFontStatus { Downloadable, Downloading, Installed, Selected, Unsupported }
 
 data class StylingSettings(
     val schemeName: String,

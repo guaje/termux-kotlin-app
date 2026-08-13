@@ -19,6 +19,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -75,6 +78,9 @@ fun StylingScreen(
     var currentSettings by remember { mutableStateOf<StylingSettings?>(null) }
     var schemes by remember { mutableStateOf(emptyList<ColorScheme>()) }
     var fonts by remember { mutableStateOf(emptyList<FontManager.FontInfo>()) }
+    var nerdQuery by remember { mutableStateOf("") }
+    var nerdStatuses by remember { mutableStateOf(emptyMap<String, NerdFontStatus>()) }
+    var downloadingNerdIds by remember { mutableStateOf(emptySet<String>()) }
     val snackbarHostState = remember { SnackbarHostState() }
 
     // Reconcile legacy Termux state before reading it into the UI.
@@ -82,6 +88,7 @@ fun StylingScreen(
         stylingManager.initialize()
         schemes = stylingManager.getAvailableSchemes()
         fonts = stylingManager.getAvailableFonts()
+        nerdStatuses = stylingManager.getNerdFontStatuses()
         currentScheme = stylingManager.getCurrentScheme()
         currentSettings = stylingManager.getCurrentSettings()
     }
@@ -163,6 +170,59 @@ fun StylingScreen(
                         onSizeChanged = { size ->
                             scope.launch {
                                 stylingManager.setFontSize(size)
+                                currentSettings = stylingManager.getCurrentSettings()
+                            }
+                        },
+                        nerdQuery = nerdQuery,
+                        onNerdQueryChanged = { nerdQuery = it },
+                        downloadingIds = downloadingNerdIds,
+                        nerdStatus = { entry ->
+                            nerdStatuses[entry.id] ?: if (entry.primaryFontSupported) {
+                                NerdFontStatus.Downloadable
+                            } else {
+                                NerdFontStatus.Unsupported
+                            }
+                        },
+                        onNerdFontAction = { entry ->
+                            if (entry.id !in downloadingNerdIds) scope.launch {
+                                val status = nerdStatuses[entry.id] ?: if (entry.primaryFontSupported) {
+                                    NerdFontStatus.Downloadable
+                                } else {
+                                    NerdFontStatus.Unsupported
+                                }
+                                when (status) {
+                                    NerdFontStatus.Downloadable -> {
+                                        downloadingNerdIds = downloadingNerdIds + entry.id
+                                        try {
+                                            when (val result = stylingManager.downloadInstallAndApplyNerdFont(entry.id)) {
+                                                is OptionalFontResult.Error -> snackbarHostState.showSnackbar(result.message)
+                                                is OptionalFontResult.Success -> Unit
+                                            }
+                                        } finally {
+                                            downloadingNerdIds = downloadingNerdIds - entry.id
+                                        }
+                                    }
+                                    NerdFontStatus.Installed -> {
+                                        when (val result = stylingManager.applyNerdFont(entry.id)) {
+                                            is OptionalFontResult.Error -> snackbarHostState.showSnackbar(result.message)
+                                            is OptionalFontResult.Success -> Unit
+                                        }
+                                    }
+                                    else -> Unit
+                                }
+                                fonts = stylingManager.getAvailableFonts()
+                                nerdStatuses = stylingManager.getNerdFontStatuses()
+                                currentSettings = stylingManager.getCurrentSettings()
+                            }
+                        },
+                        onRemoveNerdFont = { entry ->
+                            scope.launch {
+                                when (val result = stylingManager.removeNerdFont(entry.id)) {
+                                    is OptionalFontResult.Error -> snackbarHostState.showSnackbar(result.message)
+                                    is OptionalFontResult.Success -> Unit
+                                }
+                                fonts = stylingManager.getAvailableFonts()
+                                nerdStatuses = stylingManager.getNerdFontStatuses()
                                 currentSettings = stylingManager.getCurrentSettings()
                             }
                         }
@@ -375,8 +435,15 @@ fun FontsTab(
     currentFont: String,
     currentSize: Int,
     onFontSelected: (String) -> Unit,
-    onSizeChanged: (Int) -> Unit
+    onSizeChanged: (Int) -> Unit,
+    nerdQuery: String,
+    onNerdQueryChanged: (String) -> Unit,
+    downloadingIds: Set<String>,
+    nerdStatus: (NerdFontCatalogEntry) -> NerdFontStatus,
+    onNerdFontAction: (NerdFontCatalogEntry) -> Unit,
+    onRemoveNerdFont: (NerdFontCatalogEntry) -> Unit
 ) {
+    val uriHandler = LocalUriHandler.current
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -475,7 +542,111 @@ fun FontsTab(
                 onClick = { onFontSelected(font.name) }
             )
         }
+
+        item {
+            Text("Nerd Fonts v3.5.0", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 16.dp))
+        }
+        item {
+            Column {
+                Text(
+                    "Optional downloads from the pinned Nerd Fonts v${NerdFontCatalog.VERSION} release. " +
+                        "Archives can be large and remain subject to their upstream licenses.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row {
+                    TextButton(onClick = { uriHandler.openUri(NerdFontCatalog.DOWNLOADS_URL) }) {
+                        Text("Font downloads")
+                    }
+                    TextButton(onClick = { uriHandler.openUri(NerdFontCatalog.LICENSES_URL) }) {
+                        Text("License details")
+                    }
+                }
+            }
+        }
+        item {
+            OutlinedTextField(
+                value = nerdQuery,
+                onValueChange = onNerdQueryChanged,
+                label = { Text("Search Nerd Fonts") },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search Nerd Fonts") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+        }
+        items(NerdFontCatalog.optionalEntries.filter { it.family.contains(nerdQuery, ignoreCase = true) }) { entry ->
+            val status = if (entry.id in downloadingIds) NerdFontStatus.Downloading else nerdStatus(entry)
+            NerdFontCard(
+                entry = entry,
+                status = status,
+                onAction = { onNerdFontAction(entry) },
+                onRemove = { onRemoveNerdFont(entry) }
+            )
+        }
     }
+}
+
+@Composable
+fun NerdFontCard(
+    entry: NerdFontCatalogEntry,
+    status: NerdFontStatus,
+    onAction: () -> Unit,
+    onRemove: () -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(entry.family, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
+                val detail = when (status) {
+                    NerdFontStatus.Downloadable -> "Downloadable • ${formatArchiveSize(entry.archiveBytes)} archive"
+                    NerdFontStatus.Downloading -> "Downloading…"
+                    NerdFontStatus.Installed -> "Installed"
+                    NerdFontStatus.Selected -> "Selected"
+                    NerdFontStatus.Unsupported -> "Unsupported symbols-only font"
+                }
+                Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (!entry.isMonospaced) {
+                    Text(
+                        "Proportional font: terminal text may misalign.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+            when (status) {
+                NerdFontStatus.Downloading -> CircularProgressIndicator(
+                    modifier = Modifier
+                        .size(24.dp)
+                        .semantics { contentDescription = "Downloading ${entry.family}" },
+                    strokeWidth = 2.dp
+                )
+                NerdFontStatus.Unsupported -> Icon(Icons.Default.Block, contentDescription = "Unsupported symbols-only font")
+                NerdFontStatus.Selected -> IconButton(onClick = onRemove, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.Default.Delete, contentDescription = "Remove selected ${entry.family}")
+                }
+                NerdFontStatus.Installed -> Row {
+                    IconButton(onClick = onAction, modifier = Modifier.size(48.dp)) {
+                        Icon(Icons.Default.CheckCircle, contentDescription = "Apply installed ${entry.family}")
+                    }
+                    IconButton(onClick = onRemove, modifier = Modifier.size(48.dp)) {
+                        Icon(Icons.Default.Delete, contentDescription = "Remove ${entry.family}")
+                    }
+                }
+                NerdFontStatus.Downloadable -> IconButton(onClick = onAction, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.Default.Download, contentDescription = "Download ${entry.family}")
+                }
+            }
+        }
+    }
+}
+
+private fun formatArchiveSize(bytes: Long): String = when {
+    bytes >= 1024L * 1024L -> String.format("%.1f MiB", bytes / (1024.0 * 1024.0))
+    bytes >= 1024L -> String.format("%.1f KiB", bytes / 1024.0)
+    else -> "$bytes B"
 }
 
 @Composable

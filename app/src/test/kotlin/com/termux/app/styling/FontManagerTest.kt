@@ -39,7 +39,7 @@ class FontManagerTest {
     @Test
     fun `catalog contains only packaged built in fonts`() {
         assertEquals(
-            listOf("default", "fira_code", "jetbrains_mono"),
+            listOf("default", "fira_code", "hack", "jetbrains_mono"),
             manager.getAvailableFonts().map { it.name }
         )
     }
@@ -49,6 +49,16 @@ class FontManagerTest {
         val expected = context.assets.open("fonts/FiraCode-Regular.ttf").use { it.readBytes() }
 
         val result = manager.applyFont("fira_code")
+
+        assertTrue(result is FontManager.ApplyResult.Success)
+        assertArrayEquals(expected, canonicalFont.readBytes())
+    }
+
+    @Test
+    fun `applying bundled Hack writes byte identical canonical font`() {
+        val expected = context.assets.open("fonts/Hack-Regular.ttf").use { it.readBytes() }
+
+        val result = manager.applyFont("hack")
 
         assertTrue(result is FontManager.ApplyResult.Success)
         assertArrayEquals(expected, canonicalFont.readBytes())
@@ -142,11 +152,30 @@ class FontManagerTest {
     }
 
     @Test
-    fun `font install and removal reject unsafe names`() {
+    fun `downloaded Nerd font is hidden from custom list but can be applied and removed`() {
+        val source = File(root, "source.ttf")
+        val bytes = context.assets.open("fonts/FiraCode-Regular.ttf").use { it.readBytes() }
+        source.writeBytes(bytes)
+
+        assertTrue(manager.installFont(source, "nerd_0xproto", "ttf"))
+        assertTrue(manager.installFont(source, "nerd_agave", "ttf"))
+        assertFalse(manager.getAvailableFonts().any { it.name == "nerd_0xproto" })
+        assertEquals(setOf("nerd_0xproto", "nerd_agave"), manager.getInstalledNerdFontNames())
+        assertTrue(manager.isInstalledFont("nerd_0xproto"))
+        assertTrue(manager.applyFont("nerd_0xproto") is FontManager.ApplyResult.Success)
+        assertArrayEquals(bytes, canonicalFont.readBytes())
+        assertTrue(manager.removeFont("nerd_0xproto"))
+        assertTrue(manager.removeFont("nerd_agave"))
+        assertFalse(manager.isInstalledFont("nerd_0xproto"))
+    }
+
+    @Test
+    fun `font install and removal reject unsafe and reserved names`() {
         val source = File(root, "source.ttf")
         source.writeBytes(context.assets.open("fonts/FiraCode-Regular.ttf").use { it.readBytes() })
 
         assertFalse(manager.installFont(source, "../escape"))
+        assertFalse(manager.installFont(source, "hack"))
         assertFalse(manager.removeFont("../escape"))
         assertFalse(File(root.parentFile, "escape.ttf").exists())
     }
