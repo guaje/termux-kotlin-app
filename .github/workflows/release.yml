@@ -209,19 +209,34 @@ jobs:
           echo "certificate_sha256=$EXPECTED_CERT" >> "$GITHUB_OUTPUT"
           echo "Validated ${#APKS[@]} signed APKs with versionName=$TERMUX_APP_VERSION_NAME versionCode=$EXPECTED_CODE"
 
-      - name: Create release notes
+      - name: Generate release notes
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          cat > release_notes.md <<EOF
-          ## Termux Kotlin $RELEASE_TAG
+          set -euo pipefail
 
-          This release contains integrated X11/VNC, Kitty keyboard protocol support, integrated Termux:API, and the Obtainium version metadata fix.
+          # Use GitHub's auto-generated release notes as the upstream-style base
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            --field tag_name="$RELEASE_TAG" \
+            --field target_commitish="$GITHUB_SHA" \
+            repos/${{ github.repository }}/releases/generate-notes \
+            | jq -r '.body' > release_notes.md
 
-          The APK manifest reports versionName \`$TERMUX_APP_VERSION_NAME\` with a monotonically increasing versionCode. All attached APKs are release-signed with certificate SHA-256 \`${{ steps.validate.outputs.certificate_sha256 }}\`.
+          # Append fork-specific verification and Obtainium sections
+          cat >> release_notes.md <<EOF
 
-          ### Obtainium
+          ## Release verification
 
-          Add \`${{ github.server_url }}/${{ github.repository }}\` and select \`termux-app_${RELEASE_TAG}_universal.apk\`, or the APK matching your device ABI.
+          The APK manifest reports versionName \`$TERMUX_APP_VERSION_NAME\` with a monotonically increasing versionCode.
+          All attached APKs are release-signed with certificate SHA-256:
+          \`${{ steps.validate.outputs.certificate_sha256 }}\`
+
+          ## Obtainium
+
+          Add \`${{ github.server_url }}/${{ github.repository }}\` and select the APK matching your device ABI, e.g. \`termux-app_${RELEASE_TAG}_universal.apk\`.
 
           If an older \`com.termux\` installation was signed by F-Droid, Google Play, or a debug/test key, Android requires a one-time uninstall before this signing lineage can be installed.
           EOF
@@ -231,7 +246,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          name: Termux Kotlin ${{ env.RELEASE_TAG }}
+          name: 🚀 Termux Kotlin ${{ env.RELEASE_TAG }}
           body_path: release_notes.md
           prerelease: ${{ contains(env.RELEASE_TAG, '-alpha.') || contains(env.RELEASE_TAG, '-beta.') || contains(env.RELEASE_TAG, '-rc.') }}
           files: |
