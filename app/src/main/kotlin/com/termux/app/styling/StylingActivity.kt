@@ -75,11 +75,14 @@ fun StylingScreen(
     var currentSettings by remember { mutableStateOf<StylingSettings?>(null) }
     var schemes by remember { mutableStateOf(emptyList<ColorScheme>()) }
     var fonts by remember { mutableStateOf(emptyList<FontManager.FontInfo>()) }
-    
-    // Load data
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // Reconcile legacy Termux state before reading it into the UI.
     LaunchedEffect(Unit) {
+        stylingManager.initialize()
         schemes = stylingManager.getAvailableSchemes()
         fonts = stylingManager.getAvailableFonts()
+        currentScheme = stylingManager.getCurrentScheme()
         currentSettings = stylingManager.getCurrentSettings()
     }
     
@@ -87,6 +90,7 @@ fun StylingScreen(
         colorScheme = darkColorScheme()
     ) {
         Scaffold(
+            snackbarHost = { SnackbarHost(snackbarHostState) },
             topBar = {
                 TopAppBar(
                     title = { Text("Terminal Styling") },
@@ -132,8 +136,11 @@ fun StylingScreen(
                         currentScheme = currentScheme,
                         onSchemeSelected = { scheme ->
                             scope.launch {
-                                stylingManager.setColorScheme(scheme)
-                                currentScheme = scheme
+                                if (stylingManager.setColorScheme(scheme)) {
+                                    currentScheme = scheme
+                                } else {
+                                    snackbarHostState.showSnackbar("Unable to apply color scheme")
+                                }
                             }
                         }
                     )
@@ -143,8 +150,14 @@ fun StylingScreen(
                         currentSize = currentSettings?.fontSize ?: 14,
                         onFontSelected = { fontName ->
                             scope.launch {
-                                stylingManager.setFont(fontName)
-                                currentSettings = stylingManager.getCurrentSettings()
+                                when (val result = stylingManager.setFont(fontName)) {
+                                    is FontManager.ApplyResult.Success -> {
+                                        currentSettings = stylingManager.getCurrentSettings()
+                                    }
+                                    is FontManager.ApplyResult.Error -> {
+                                        snackbarHostState.showSnackbar(result.message)
+                                    }
+                                }
                             }
                         },
                         onSizeChanged = { size ->
@@ -388,9 +401,11 @@ fun FontsTab(
                             fontWeight = FontWeight.Bold
                         )
                     }
+                    var sliderSize by remember(currentSize) { mutableFloatStateOf(currentSize.toFloat()) }
                     Slider(
-                        value = currentSize.toFloat(),
-                        onValueChange = { onSizeChanged(it.toInt()) },
+                        value = sliderSize,
+                        onValueChange = { sliderSize = it },
+                        onValueChangeFinished = { onSizeChanged(sliderSize.toInt()) },
                         valueRange = 6f..42f,
                         steps = 35,
                         modifier = Modifier.fillMaxWidth()
