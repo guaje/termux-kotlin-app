@@ -43,6 +43,9 @@ class TermuxTerminalSessionActivityClient(private val mActivity: TermuxActivity)
      * Should be called when mActivity.onStart() is called
      */
     fun onStart() {
+        // The styling reload broadcast can be missed while StylingActivity is foregrounded.
+        checkForFontAndColors()
+
         // The service has connected, but data may have changed since we were last in the foreground.
         if (mActivity.termuxService != null) {
             setCurrentSession(currentStoredSessionOrLast)
