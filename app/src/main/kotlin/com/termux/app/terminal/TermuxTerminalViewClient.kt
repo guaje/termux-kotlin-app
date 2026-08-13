@@ -71,6 +71,8 @@ class TermuxTerminalViewClient(
      * Should be called when mActivity.onStart() is called
      */
     fun onStart() {
+        // The styling reload broadcast can be missed while StylingActivity is foregrounded.
+        mActivity.terminalView.setTextSize(mActivity.preferences?.getFontSize() ?: 14)
         val isTerminalViewKeyLoggingEnabled = mActivity.preferences?.isTerminalViewKeyLoggingEnabled() == true
         mActivity.terminalView.setIsTerminalViewKeyLoggingEnabled(isTerminalViewKeyLoggingEnabled)
         mActivity.termuxActivityRootView?.setIsRootViewLoggingEnabled(isTerminalViewKeyLoggingEnabled)
@@ -108,6 +110,7 @@ class TermuxTerminalViewClient(
      * Should be called when mActivity.reloadActivityStyling() is called
      */
     fun onReloadActivityStyling() {
+        mActivity.terminalView.setTextSize(mActivity.preferences?.getFontSize() ?: 14)
         setSoftKeyboardState(false, true)
         setTerminalCursorBlinkerState(true)
     }
