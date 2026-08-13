@@ -391,76 +391,93 @@ The Termux:API functionality is integrated directly into the app, eliminating th
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     termuxctl CLI                            │
-│              termuxctl device battery                        │
-│              termuxctl device location                       │
+│ Public Termux:API-compatible commands                       │
+│ termux-battery-status, termux-clipboard-*, termux-volume...  │
 ├─────────────────────────────────────────────────────────────┤
-│                   DeviceCommands.kt                          │
-│          (CLI command handlers for device APIs)              │
+│ TermuxApiReceiver.kt                                        │
+│ BatteryStatus / Clipboard / Toast / Vibrate / Volume handlers│
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│ Separate termuxctl device action layer                      │
 ├─────────────────────────────────────────────────────────────┤
-│                  DeviceApiService.kt                         │
-│      (Background service for long-running operations)        │
+│ DeviceCommands.kt → DeviceApiService.kt                     │
 ├─────────────────────────────────────────────────────────────┤
-│  ┌──────────────────────┐  ┌──────────────────────────────┐  │
-│  │     BatteryAction    │  │       LocationAction         │  │
-│  │     ClipboardAction  │  │       SensorAction          │  │
-│  │     CameraAction     │  │       WifiAction            │  │
-│  │          ...         │  │           ...               │  │
-│  └──────────────────────┘  └──────────────────────────────┘  │
-│                    (Device API Actions)                      │
+│ BatteryAction / ClipboardAction / ToastAction               │
+│ TorchAction / VibrateAction                                 │
 ├─────────────────────────────────────────────────────────────┤
-│                  DeviceApiActionBase.kt                      │
-│   (Base class with logging, permissions, error handling)     │
-├─────────────────────────────────────────────────────────────┤
-│                    Core Components                           │
-│  ┌──────────────┐ ┌───────────────┐ ┌────────────────────┐  │
-│  │ Result<T,E>  │ │ DeviceApiError │ │  PermissionManager │  │
-│  │ TermuxError  │ │   hierarchy    │ │  TermuxLogger      │  │
-│  └──────────────┘ └───────────────┘ └────────────────────┘  │
+│ DeviceApiActionBase / Result / DeviceApiError / logging     │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ### Module Structure
 
 ```
-app/src/main/kotlin/com/termux/app/
-├── core/
-│   └── deviceapi/
-│       ├── DeviceApiError.kt         # Error types for device APIs
-│       ├── actions/
-│       │   ├── DeviceApiActionBase.kt # Base class for all actions
-│       │   ├── BatteryAction.kt       # Battery status API
-│       │   ├── ClipboardAction.kt     # Clipboard get/set
-│       │   ├── LocationAction.kt      # GPS location
-│       │   ├── SensorAction.kt        # Device sensors
-│       │   └── ...
-│       ├── models/
-│       │   ├── BatteryInfo.kt         # Battery data model
-│       │   ├── DeviceApiMessage.kt    # IPC message types
-│       │   └── ...
-│       └── service/
-│           └── DeviceApiService.kt    # Background service
-├── di/
-│   └── DeviceApiModule.kt             # Hilt DI module
-└── pkg/cli/commands/device/
-    └── DeviceCommands.kt              # CLI commands
+app/src/main/kotlin/com/termux/
+├── api/
+│   ├── TermuxApiReceiver.kt          # Public termux-* command dispatcher
+│   ├── ResultReturner.kt             # Socket result transport
+│   └── handlers/
+│       ├── BatteryStatusHandler.kt
+│       ├── ClipboardHandler.kt
+│       ├── ToastHandler.kt
+│       ├── VibrateHandler.kt
+│       └── VolumeHandler.kt
+└── app/
+    ├── core/deviceapi/
+    │   ├── actions/
+    │   │   ├── DeviceApiActionBase.kt
+    │   │   ├── BatteryAction.kt
+    │   │   ├── ClipboardAction.kt
+    │   │   ├── ToastAction.kt
+    │   │   ├── TorchAction.kt
+    │   │   └── VibrateAction.kt
+    │   ├── models/                   # Battery and IPC models
+    │   └── service/DeviceApiService.kt
+    ├── di/DeviceApiModule.kt
+    └── pkg/cli/commands/device/DeviceCommands.kt
 ```
 
 ### Available APIs
 
-| API | Command | Permissions | Status |
-|-----|---------|-------------|--------|
-| Battery | `termuxctl device battery` | None | ✅ Implemented |
-| Clipboard | `termuxctl device clipboard` | None | 🔜 Planned |
-| Location | `termuxctl device location` | ACCESS_FINE_LOCATION | 🔜 Planned |
-| Sensors | `termuxctl device sensor` | None | 🔜 Planned |
-| Camera | `termuxctl device camera` | CAMERA | 🔜 Planned |
-| WiFi | `termuxctl device wifi` | ACCESS_WIFI_STATE | 🔜 Planned |
-| Volume | `termuxctl device volume` | None | 🔜 Planned |
-| Torch | `termuxctl device torch` | CAMERA | 🔜 Planned |
-| Vibrate | `termuxctl device vibrate` | VIBRATE | 🔜 Planned |
-| TTS | `termuxctl device tts` | None | 🔜 Planned |
-| Toast | `termuxctl device toast` | None | 🔜 Planned |
+There are two separate device-API surfaces. The public, Termux:API-compatible
+`termux-*` commands use `TermuxApiReceiver`; the newer `termuxctl device` action
+layer is separate and is not a substitute for a missing public receiver handler.
+
+#### Public integrated Termux:API bridge
+
+| API | Command | Permissions | Status | Test evidence |
+|-----|---------|-------------|--------|---------------|
+| Battery | `termux-battery-status` | None | ✅ Shipped + Android-tested | Physical v2.5.0 smoke test |
+| Clipboard | `termux-clipboard-get`, `termux-clipboard-set` | None | ✅ Shipped + Android-tested | Physical v2.5.0 get/set round trip; JVM regression tests for set-extra recognition and get-by-default selection |
+| Toast | `termux-toast` | None | ✅ Shipped + Android-tested | Physical v2.5.0 smoke test |
+| Vibrate | `termux-vibrate` | `VIBRATE` | ✅ Shipped + Android-tested | Physical v2.5.0 smoke test |
+| Volume | `termux-volume` | `MODIFY_AUDIO_SETTINGS` for setting | ✅ Shipped + Android-tested | Physical v2.5.0 smoke test |
+| Location | `termux-location` | `ACCESS_FINE_LOCATION` | 🔜 Missing | No receiver handler |
+| Sensors | `termux-sensor` | Varies by sensor | 🔜 Missing | No receiver handler |
+| Camera | `termux-camera-info`, `termux-camera-photo` | `CAMERA` | 🔜 Missing | No receiver handler |
+| WiFi | `termux-wifi-connectioninfo`, `termux-wifi-scaninfo` | `ACCESS_WIFI_STATE`, location for scans | 🔜 Missing | No receiver handler |
+| Torch | `termux-torch` | `CAMERA` | 🔜 Missing | `TorchAction` exists only in the separate action layer |
+| TTS | `termux-tts-engines`, `termux-tts-speak` | None | 🔜 Missing | No receiver handler |
+
+Only the five API families marked **Shipped** are currently dispatched by
+`TermuxApiReceiver`. Other upstream Termux:API commands not listed above are
+also missing until a receiver handler is added and tested.
+
+#### `termuxctl device` action layer
+
+| Action | Command | Status | Test status |
+|--------|---------|--------|-------------|
+| Battery | `termuxctl device battery` | 🧪 Implemented in code | No direct action/CLI test |
+| Clipboard get/set | `termuxctl device clipboard-get`, `termuxctl device clipboard-set --text <value>` | 🧪 Implemented in code | No direct action/CLI test |
+| Toast | `termuxctl device toast --text <value>` | 🧪 Implemented in code | No direct action/CLI test |
+| Vibrate | `termuxctl device vibrate --duration <ms>` | 🧪 Implemented in code | No direct action/CLI test |
+| Torch | `termuxctl device torch --enabled true\|false` | 🧪 Implemented in code | No direct action/CLI or physical release test |
+| Volume and all other actions | — | 🔜 Missing from this dispatcher | — |
+
+**Legend:** ✅ is shipped through the public integrated bridge and physically
+release-tested; 🧪 is implemented code that still needs direct tests; 🔜 is not
+implemented on that surface.
 
 ### Implementation Pattern
 
@@ -514,24 +531,39 @@ sealed class DeviceApiError : TermuxError() {
 
 ### CLI Usage
 
+`TermuxApiReceiver` commands (shipped / upstream-compatible syntax):
 ```bash
 # Battery status
-termuxctl device battery
+termux-battery-status
+
+# Clipboard
+termux-clipboard-get
+printf '%s' 'hello' | termux-clipboard-set
+
+# Toast
+echo "hello" | termux-toast
+
+# Vibrate
+termux-vibrate -d 200
+
+# Volume
+termux-volume
+termux-volume music 15
+```
+
+In-app `termuxctl device` action paths (implemented in code; direct tests still needed):
+```bash
 termuxctl device battery --json
-termuxctl device battery --extended
+termuxctl device clipboard-get
+termuxctl device clipboard-set --text "hello"
+termuxctl device toast --text "hello"
+termuxctl device torch --enabled true
+termuxctl device vibrate --duration 500
+```
 
-# List available APIs
+List supported in-app commands:
+```bash
 termuxctl device list
-
-# Future APIs
-termuxctl device location --provider gps
-termuxctl device sensor --list
-termuxctl device sensor --name accelerometer
-termuxctl device clipboard get
-termuxctl device clipboard set "text"
-termuxctl device wifi scan
-termuxctl device volume get
-termuxctl device torch on
 ```
 
 ### IPC Messages

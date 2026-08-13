@@ -23,10 +23,16 @@ allprojects {
     }
 }
 
-// Apply Detekt to all subprojects
+// Apply Detekt and JaCoCo to all subprojects so testDebugUnitTest produces .exec data
 subprojects {
+    apply plugin: 'jacoco'
     apply plugin: 'io.gitlab.arturbosch.detekt'
-    
+
+    tasks.withType(Test).configureEach {
+        jacoco.includeNoLocationClasses = true
+        jacoco.excludes = ['jdk.internal.*']
+    }
+
     detekt {
         buildUponDefaultConfig = true
         allRules = false
@@ -34,7 +40,7 @@ subprojects {
         baseline = file("$projectDir/config/detekt/baseline.xml")
         parallel = true
     }
-    
+
     tasks.withType(io.gitlab.arturbosch.detekt.Detekt).configureEach {
         jvmTarget = "17"
         reports {
@@ -43,5 +49,71 @@ subprojects {
             txt.required.set(false)
             sarif.required.set(true)
         }
+    }
+}
+
+// JaCoCo coverage for root and subprojects; modules with no tests remain in the denominator.
+apply plugin: 'jacoco'
+
+jacoco {
+    toolVersion = '0.8.12'
+}
+
+def coverageExcludes = [
+    '**/R.class',
+    '**/R$*.class',
+    '**/BuildConfig.*',
+    '**/Manifest*.*',
+    '**/*Test*.*',
+    '**/*_Factory*.*',
+    '**/*Module_*Factory*.*',
+    '**/*_MembersInjector*.*',
+    '**/*_GeneratedInjector*.*',
+    '**/*_Impl*.*',
+    '**/*_LazyMapKey*.*',
+    '**/Hilt_*.*',
+    '**/*HiltModules*.*',
+    '**/Dagger*.*',
+    '**/*_ComponentTreeDeps*.*',
+    '**/dagger/hilt/internal/**',
+    '**/hilt_aggregated_deps/**',
+    '**/*JsonAdapter*.*',
+    '**/*serializer*.*'
+]
+
+task jacocoTestReport(type: JacocoReport, group: 'verification') {
+    description = 'Runs all debug unit tests and generates an aggregate coverage report.'
+    dependsOn rootProject.subprojects.collect { "${it.path}:testDebugUnitTest" }
+
+    reports {
+        xml.required.set(true)
+        xml.outputLocation.set(layout.buildDirectory.file('reports/jacoco/jacocoTestReport/jacocoTestReport.xml'))
+        html.required.set(true)
+        html.outputLocation.set(layout.buildDirectory.dir('reports/jacoco/jacocoTestReport/html'))
+        csv.required.set(false)
+    }
+
+    rootProject.subprojects.each { proj ->
+        if (proj.path == ':app') {
+            // Hilt transforms application classes; use the transformed output so
+            // the report matches the bytecode recorded in JaCoCo execution data.
+            classDirectories.from(proj.fileTree(
+                dir: "${proj.buildDir}/intermediates/classes/debug/transformDebugClassesWithAsm/dirs",
+                excludes: coverageExcludes
+            ))
+        } else {
+            classDirectories.from(
+                proj.fileTree(dir: "${proj.buildDir}/tmp/kotlin-classes/debug", excludes: coverageExcludes),
+                proj.fileTree(dir: "${proj.buildDir}/intermediates/javac/debug/compileDebugJavaWithJavac/classes", excludes: coverageExcludes)
+            )
+        }
+        sourceDirectories.from(
+            "${proj.projectDir}/src/main/java",
+            "${proj.projectDir}/src/main/kotlin"
+        )
+        executionData.from(proj.fileTree(dir: proj.buildDir, includes: [
+            'outputs/unit_test_code_coverage/debugUnitTest/testDebugUnitTest.exec',
+            'jacoco/testDebugUnitTest.exec'
+        ]))
     }
 }

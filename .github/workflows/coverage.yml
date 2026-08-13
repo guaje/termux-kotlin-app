@@ -30,13 +30,13 @@ jobs:
         run: chmod +x gradlew
 
       - name: Run tests with coverage
-        run: ./gradlew testDebugUnitTest jacocoTestReport --no-daemon
-        continue-on-error: true
+        run: ./gradlew jacocoTestReport --no-daemon
 
       - name: Upload coverage to Codecov
+        if: always()
         uses: codecov/codecov-action@v5
         with:
-          files: '**/build/reports/jacoco/**/*.xml'
+          files: build/reports/jacoco/jacocoTestReport/jacocoTestReport.xml
           flags: unittests
           name: codecov-termux-kotlin
           fail_ci_if_error: false
@@ -47,5 +47,5 @@ jobs:
         if: always()
         with:
           name: coverage-reports
-          path: '**/build/reports/jacoco/**'
+          path: build/reports/jacoco/jacocoTestReport/
           retention-days: 14
