@@ -89,7 +89,7 @@ No more separate plugin APKs! These features are now built-in:
 | Plugin | Status | Features |
 |--------|--------|----------|
 | **Termux:Boot** | ✅ Built-in | Auto-run scripts on device boot |
-| **Termux:Styling** | ✅ Built-in | 11 color schemes, custom fonts, Compose UI |
+| **Termux:Styling** | ✅ Built-in | 11 color schemes; bundled Fira Code, Hack, and JetBrains Mono; optional Nerd Font downloads; Compose UI |
 | **Termux:Widget** | ✅ Built-in | 3 widget sizes, shortcut execution |
 | **Termux:API** | ✅ Built-in | Native IPC plus battery, clipboard, toast, vibration, volume, and torch support |
 | Termux:Tasker | 📋 Planned | Tasker integration |
