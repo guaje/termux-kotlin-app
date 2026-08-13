@@ -1,0 +1,7 @@
+Termux Kotlin v2.5.1
+
+- Fix integrated Termux:Styling fonts so selections apply to the terminal.
+- Bundle Fira Code, Hack, and JetBrains Mono with upstream licenses.
+- Add explicit, checksum-verified downloads for the Nerd Fonts v3.5.0 catalog.
+- Add searchable download, install, apply, and removal controls.
+- Preserve custom fonts and existing Termux data during upgrades.
