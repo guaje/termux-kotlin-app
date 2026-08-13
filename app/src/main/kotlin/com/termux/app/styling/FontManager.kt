@@ -43,10 +43,14 @@ class FontManager @Inject constructor(
     private val bundledFonts = listOf(
         FontInfo("default", "Default (system monospace)", isBuiltIn = true),
         FontInfo("fira_code", "Fira Code", isBuiltIn = true, path = "fonts/FiraCode-Regular.ttf"),
+        FontInfo("hack", "Hack", isBuiltIn = true, path = "fonts/Hack-Regular.ttf"),
         FontInfo("jetbrains_mono", "JetBrains Mono", isBuiltIn = true, path = "fonts/JetBrainsMono-Regular.ttf")
     )
 
+    @Volatile
     private var currentFont: Typeface = Typeface.MONOSPACE
+
+    @Volatile
     private var currentFontName: String = "default"
 
     /** Returns Default and only bundled assets which are actually packaged and readable. */
@@ -117,11 +121,13 @@ class FontManager @Inject constructor(
         return fontsDirectory
     }
 
-    fun installFont(sourceFile: File, name: String): Boolean {
+    fun installFont(sourceFile: File, name: String, knownExtension: String? = null): Boolean {
         var stagedFont: File? = null
         return try {
             require(isSafeUserFontName(name)) { "Invalid font name" }
-            val extension = sourceFile.extension.lowercase().takeIf { it == "ttf" || it == "otf" } ?: "ttf"
+            val extension = knownExtension?.lowercase()?.takeIf { it == "ttf" || it == "otf" }
+                ?: sourceFile.extension.lowercase().takeIf { it == "ttf" || it == "otf" }
+                ?: "ttf"
             val directory = ensureFontsDirectory()
             stagedFont = File.createTempFile(".termux-styling-install-", ".tmp", directory)
             FileInputStream(sourceFile).use { input ->
@@ -160,6 +166,21 @@ class FontManager @Inject constructor(
         return removed
     }
 
+    /** Downloaded Nerd fonts are intentionally hidden from the generic custom-font list. */
+    fun isInstalledFont(name: String): Boolean = findInstalledFont(name) != null
+
+    /** Returns all installed catalog storage names with one private-directory scan. */
+    fun getInstalledNerdFontNames(): Set<String> = fontsDirectory.listFiles()
+        ?.asSequence()
+        ?.filter {
+            it.isFile &&
+                (it.extension.equals("ttf", true) || it.extension.equals("otf", true)) &&
+                it.nameWithoutExtension.startsWith(NERD_FONT_PREFIX)
+        }
+        ?.map { it.nameWithoutExtension }
+        ?.toSet()
+        .orEmpty()
+
     private fun applyDefault(): ApplyResult = try {
         val atomicFile = AtomicFile(canonicalFontFile)
         atomicFile.delete()
@@ -184,7 +205,7 @@ class FontManager @Inject constructor(
     private fun applyBundledOrUserFont(name: String): ApplyResult {
         val bundled = bundledFonts.firstOrNull { it.name == name && it.path != null }
         val userFont = if (bundled == null) {
-            validUserFontFiles().firstOrNull { it.nameWithoutExtension == name }
+            findInstalledFont(name)
                 ?: return ApplyResult.Error(name, "Font '$name' is not available")
         } else {
             null
@@ -263,8 +284,7 @@ class FontManager @Inject constructor(
             val expectedDigest = if (bundled != null) {
                 context.assets.open(bundled.path!!).use(::sha256)
             } else {
-                val userFont = validUserFontFiles().firstOrNull { it.nameWithoutExtension == name }
-                    ?: return false
+                val userFont = findInstalledFont(name) ?: return false
                 FileInputStream(userFont).use(::sha256)
             }
             FileInputStream(canonicalFontFile).use(::sha256).contentEquals(expectedDigest)
@@ -302,11 +322,24 @@ class FontManager @Inject constructor(
     private fun isSafeUserFontName(name: String): Boolean =
         SAFE_USER_FONT_NAME.matches(name) && name.lowercase() !in reservedFontNames
 
+    private fun findInstalledFont(name: String): File? {
+        if (!SAFE_USER_FONT_NAME.matches(name) || name.lowercase() in reservedFontNames) return null
+        return fontsDirectory.listFiles()
+            ?.filter {
+                it.isFile &&
+                    (it.extension.equals("ttf", true) || it.extension.equals("otf", true)) &&
+                    it.nameWithoutExtension == name
+            }
+            ?.sortedBy { it.name.lowercase() }
+            ?.firstOrNull()
+    }
+
     private fun validUserFontFiles(): List<File> = fontsDirectory.listFiles()
         ?.filter {
             it.isFile &&
                 (it.extension.equals("ttf", true) || it.extension.equals("otf", true)) &&
-                it.nameWithoutExtension.lowercase() !in reservedFontNames
+                it.nameWithoutExtension.lowercase() !in reservedFontNames &&
+                !it.nameWithoutExtension.startsWith(NERD_FONT_PREFIX)
         }
         ?.sortedBy { it.name.lowercase() }
         .orEmpty()
@@ -322,7 +355,8 @@ class FontManager @Inject constructor(
         const val SFNT_VERSION_OTTO = 0x4F54544F
         const val SFNT_VERSION_TRUE = 0x74727565
         const val SFNT_VERSION_TYP1 = 0x74797031
-        val reservedFontNames = setOf("default", "custom", "fira_code", "jetbrains_mono")
+        const val NERD_FONT_PREFIX = "nerd_"
+        val reservedFontNames = setOf("default", "custom", "fira_code", "hack", "jetbrains_mono")
         val SAFE_USER_FONT_NAME = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
     }
 }

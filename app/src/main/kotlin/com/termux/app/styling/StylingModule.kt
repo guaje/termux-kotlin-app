@@ -14,7 +14,18 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object StylingModule {
-    
+
+    @Provides
+    @Singleton
+    fun provideNerdFontArchiveProvider(): NerdFontArchiveProvider = HttpNerdFontArchiveProvider()
+
+    @Provides
+    @Singleton
+    fun provideNerdFontDownloadClient(
+        @ApplicationContext context: Context,
+        archiveProvider: NerdFontArchiveProvider
+    ): NerdFontDownloadClient = NerdFontDownloader(context, archiveProvider)
+
     @Provides
     @Singleton
     fun provideFontManager(
@@ -27,8 +38,9 @@ object StylingModule {
     @Singleton
     fun provideStylingManager(
         @ApplicationContext context: Context,
-        fontManager: FontManager
+        fontManager: FontManager,
+        nerdFontDownloadClient: NerdFontDownloadClient
     ): StylingManager {
-        return StylingManager(context, fontManager)
+        return StylingManager(context, fontManager, nerdFontDownloadClient)
     }
 }
