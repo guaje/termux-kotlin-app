@@ -1,3 +1,15 @@
+## [2026-08-13] Build #32
+
+### Changes
+- cfbca7a Prepare v2.5.1 release metadata (#14)
+
+### Build Status
+- Prefix Validation: success
+- APK Build: success
+- Emulator Tests: skipped
+
+---
+
 ## [2026-08-13] Build #30
 
 ### Changes
