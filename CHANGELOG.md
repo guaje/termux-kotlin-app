@@ -1,3 +1,15 @@
+## [2026-08-13] Build #26
+
+### Changes
+- dae3a65 Align release styling, API docs, and coverage reporting (#11)
+
+### Build Status
+- Prefix Validation: success
+- APK Build: success
+- Emulator Tests: skipped
+
+---
+
 ## [2026-08-12] Build #23
 
 ### Changes
