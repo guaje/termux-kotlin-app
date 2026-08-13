@@ -1,3 +1,15 @@
+## [2026-08-13] Build #30
+
+### Changes
+- b0e280a Add Hack and optional Nerd Font downloads (#13)
+
+### Build Status
+- Prefix Validation: success
+- APK Build: success
+- Emulator Tests: skipped
+
+---
+
 ## [2026-08-13] Build #28
 
 ### Changes
