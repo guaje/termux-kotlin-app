@@ -19,6 +19,7 @@ import com.termux.shared.interact.MessageDialogUtils
 import com.termux.shared.logger.Logger
 import com.termux.shared.markdown.MarkdownUtils
 import com.termux.shared.termux.TermuxConstants
+import com.termux.shared.termux.TermuxConstants.TERMUX_BIN_PREFIX_DIR_PATH
 import com.termux.shared.termux.TermuxConstants.TERMUX_PREFIX_DIR
 import com.termux.shared.termux.TermuxConstants.TERMUX_PREFIX_DIR_PATH
 import com.termux.shared.termux.TermuxConstants.TERMUX_STAGING_PREFIX_DIR
@@ -106,6 +107,9 @@ object TermuxInstaller {
                 // idempotent migration before opening the first terminal session.
                 Thread {
                     try {
+                        // Repair login scripts broken by older builds which exec'd bash with
+                        // --noprofile --norc, preventing ~/.profile and ~/.bashrc sourcing.
+                        repairLoginScript()
                         installEssentialPackages(activity)
                     } catch (e: Exception) {
                         Logger.logStackTraceWithMessage(LOG_TAG, "Essential package migration failed", e)
@@ -234,10 +238,10 @@ object TermuxInstaller {
                     }
                 }
                 
-                // Fix login script to avoid bash's hardcoded profile path issue
-                // When original Termux is installed, bash finds the old /etc/profile (permission denied)
-                // We fix this by using --noprofile and manually sourcing our profile
-                fixLoginScript(File(TERMUX_STAGING_PREFIX_DIR_PATH, "bin/login"), ourFilesPrefix)
+                // Ensure bin/login is the stock upstream script. Older builds replaced it
+                // with a variant that exec'd `bash --noprofile --norc`, which stopped bash
+                // from sourcing ~/.profile and ~/.bashrc on startup.
+                repairLoginScript()
                 
                 // NOTE: With com.termux package name, dpkg/apt wrappers are NOT needed
                 // The upstream packages already have correct paths for /data/data/com.termux/
@@ -684,48 +688,112 @@ object TermuxInstaller {
     }
     
     /**
-     * Fix the login script to avoid bash's hardcoded profile path issue.
-     * 
-     * Problem: Upstream bash binary has /data/data/com.termux/files/usr/etc/profile hardcoded.
-     * When original Termux app is installed, bash finds that profile (permission denied).
-     * When it's not installed, bash can't find the file and continues normally.
-     * 
-     * Solution: Modify login script to use bash --noprofile and manually source our profile.
-     * This ensures we always use OUR profile regardless of what other apps are installed.
+     * Marker present only in login scripts written by the pre-com.termux package-name
+     * builds of this app. Those scripts exec'd `bash --noprofile --norc`, which stopped
+     * bash from sourcing ~/.profile, ~/.bash_profile and ~/.bashrc on startup, so the
+     * user's shell configuration (e.g. starship) was never loaded for terminal sessions.
      */
-    private fun fixLoginScript(loginFile: File, ourFilesPrefix: String) {
+    private const val BROKEN_LOGIN_SCRIPT_MARKER = "--noprofile --norc"
+
+    /**
+     * Repair bin/login if a previous build replaced it with the broken variant.
+     *
+     * The workaround targeted the old com.termux.kotlin package name era, where the
+     * upstream bash binary's compiled-in profile path pointed at another app's private
+     * data directory. This app now uses the upstream com.termux package name, so the
+     * stock bootstrap login script is correct: it exec's $SHELL as a login shell, which
+     * makes bash source $PREFIX/etc/profile, which sources ~/.bashrc for interactive
+     * shells. The repair is idempotent and leaves user-customized login scripts alone.
+     */
+    private fun repairLoginScript() {
         try {
-            if (!loginFile.exists()) {
-                Logger.logWarn(LOG_TAG, "Login script not found at ${loginFile.absolutePath}")
-                return
+            val loginFile = File(TERMUX_BIN_PREFIX_DIR_PATH, "login")
+            if (!loginFile.isFile) return
+            if (!loginFile.readText().contains(BROKEN_LOGIN_SCRIPT_MARKER)) return
+
+            // Write to a temp file and rename so a crash mid-write can never leave a
+            // truncated login script behind.
+            val temporaryFile = File(loginFile.parentFile, "login.termux-kotlin-repair.tmp")
+            temporaryFile.writeText(stockLoginScript())
+            Os.chmod(temporaryFile.absolutePath, 448) // 0700 octal
+            if (!temporaryFile.renameTo(loginFile)) {
+                temporaryFile.delete()
+                throw RuntimeException("Renaming repaired login script into place failed")
             }
-            
-            // Create a login script that explicitly sources our profile
-            // This avoids relying on bash's compiled-in profile path
-            // IMPORTANT: Use bash shebang because we use exec -a (a bash extension)
-            val fixedLoginScript = """#!/${ourFilesPrefix}/usr/bin/bash
-# Termux login script - modified to avoid hardcoded bash profile path issues
-# Original bash binary has /data/data/com.termux paths compiled in.
-# We use --noprofile to skip that and manually source our profile.
-# NOTE: This script MUST use bash (not sh) because exec -a is a bash extension.
+            Logger.logInfo(LOG_TAG, "Repaired termux login script broken by a previous build")
+        } catch (e: Exception) {
+            Logger.logError(LOG_TAG, "Failed to repair termux login script: ${e.message}")
+        }
+    }
 
-export PREFIX="${ourFilesPrefix}/usr"
-export HOME="${ourFilesPrefix}/home"
+    /** The stock upstream termux login script shipped in the bootstrap zip. */
+    private fun stockLoginScript(): String {
+        val prefix = TermuxConstants.TERMUX_PREFIX_DIR_PATH
+        return """#!$prefix/bin/sh
 
-# Source our profile if it exists
-if [ -f "${'$'}PREFIX/etc/profile" ]; then
-    . "${'$'}PREFIX/etc/profile"
+if tty >/dev/null 2>&1 && [ ${'$'}# = 0 ] && [ ! -f ~/.hushlogin ] && [ -z "${'$'}TERMUX_HUSHLOGIN" ]; then
+	# Use user defined dynamic motd file if it exists
+	if [ -f ~/.termux/motd.sh ]; then
+		[ ! -x ~/.termux/motd.sh ] && chmod u+x ~/.termux/motd.sh
+		~/.termux/motd.sh
+	# Default to termux-tools package provided static motd file if it exists
+	elif [ -f $prefix/etc/motd ]; then
+		cat $prefix/etc/motd
+	fi
+else
+	# This variable shouldn't be kept set.
+	unset TERMUX_HUSHLOGIN
 fi
 
-# Execute bash without its built-in profile sourcing
-# The '-' prefix (via exec -a) makes it a login shell (for PS1, job control, etc.)
-exec -a "-bash" "${ourFilesPrefix}/usr/bin/bash" --noprofile --norc
-"""
-            loginFile.writeText(fixedLoginScript)
-            Logger.logInfo(LOG_TAG, "Fixed login script to avoid hardcoded profile path issues")
-        } catch (e: Exception) {
-            Logger.logError(LOG_TAG, "Failed to fix login script: ${e.message}")
-        }
+# TERMUX_VERSION env variable has been exported since v0.107 and PATH was being set to following value in <0.104. Last playstore version was v0.101.
+if tty >/dev/null 2>&1 && [ ${'$'}# = 0 ] && [ -f $prefix/etc/motd-playstore ] && [ -z "${'$'}TERMUX_VERSION" ] && [ "${'$'}PATH" = "$prefix/bin:$prefix/bin/applets" ]; then
+	printf '\033[0;31m'; cat $prefix/etc/motd-playstore; printf '\033[0m'
+fi
+
+if [ -G ~/.termux/shell ]; then
+	export SHELL="`realpath ~/.termux/shell`"
+else
+	for file in $prefix/bin/bash $prefix/bin/sh /system/bin/sh; do
+		if [ -x ${'$'}file ]; then
+			export SHELL=${'$'}file
+			break
+		fi
+	done
+fi
+
+# TERMUX_APP_PACKAGE_MANAGER should be exported by termux-app v0.119.0+ itself
+if [ -z "${'$'}{TERMUX_APP_PACKAGE_MANAGER-}" ]; then
+	if { [ -n "${'$'}(command -v dpkg)" ] && dpkg --compare-versions "${'$'}TERMUX_VERSION" lt 0.119.0; } ||   # apt
+		{ [ -n "${'$'}(command -v vercmp)" ] && [ "${'$'}(vercmp "${'$'}TERMUX_VERSION" 0.119.0)" = "-1" ]; }; then # pacman
+		# For the correct operation of scripts that work with the package manager
+		export TERMUX_MAIN_PACKAGE_FORMAT="debian"
+	fi
+fi
+
+# Export `libtermux-exec-ld-preload.so` for `termux-exec`
+# package version `>= 2.0.0`.
+# Some devices may not support setting `${'$'}LD_PRELOAD`.
+# - https://github.com/termux/termux-packages/issues/2066
+# - https://github.com/termux/termux-packages/commit/1ec6c042
+# - https://github.com/termux/termux-packages/commit/6fb2bb2f
+if [ -f "$prefix/lib/libtermux-exec-ld-preload.so" ]; then
+	export LD_PRELOAD="$prefix/lib/libtermux-exec-ld-preload.so"
+	${'$'}SHELL -c "coreutils --coreutils-prog=true" > /dev/null 2>&1 || unset LD_PRELOAD
+elif [ -f "$prefix/lib/libtermux-exec.so" ]; then
+	export LD_PRELOAD="$prefix/lib/libtermux-exec.so"
+	${'$'}SHELL -c "coreutils --coreutils-prog=true" > /dev/null 2>&1 || unset LD_PRELOAD
+fi
+
+if [ -f $prefix/etc/termux-login.sh ]; then
+	. $prefix/etc/termux-login.sh
+fi
+
+if [ -n "${'$'}TERM" ]; then
+	exec "${'$'}SHELL" -l "${'$'}@"
+else
+	exec "${'$'}SHELL" "${'$'}@"
+fi
+""".trimIndent()
     }
     
     /**
