@@ -61,12 +61,13 @@ This fork focuses on:
 - Modern Android development practices
 - AI agent integration for development assistance
 
-### ✨ v2.5.1 highlights
+### ✨ v2.5.2 highlights
 
-- Fix integrated Termux:Styling fonts so selections apply to the terminal
-- Bundle Fira Code, Hack, and JetBrains Mono with their upstream licenses
-- Add secure, explicit downloads for the pinned Nerd Fonts v3.5.0 catalog
-- Preserve the v2.5.0 X11/VNC, Kitty keyboard, integrated Termux:API, and Obtainium improvements
+- Restore the stock Termux login script so ~/.bashrc and shell init files load on startup
+- Bundle the full Hack Nerd Font so starship and Nerd Font icons render out of the box
+- Move Fira Code and JetBrains Mono to explicit, checksum-verified Nerd Font downloads
+- Upgrade existing plain-Hack installations to the bundled Nerd Font automatically
+- Preserve the v2.5.1 Styling catalog, X11/VNC, Kitty keyboard, integrated Termux:API, and Obtainium improvements
 
 See [Obtainium installation](docs/OBTAINIUM.md) and [canuk integration provenance](docs/CANUK_INTEGRATION.md).
 
@@ -345,7 +346,7 @@ Choose the appropriate variant for your device:
 
 ### Obtainium
 
-Add this repository URL to Obtainium and select the `termux-app_v2.5.1_universal.apk` release asset. See [docs/OBTAINIUM.md](docs/OBTAINIUM.md), especially the signing-key migration note for existing `com.termux` installations.
+Add this repository URL to Obtainium and select the `termux-app_v2.5.2_universal.apk` release asset. See [docs/OBTAINIUM.md](docs/OBTAINIUM.md), especially the signing-key migration note for existing `com.termux` installations.
 
 ### Build from Source
 
@@ -370,7 +371,7 @@ cd termux-kotlin-app
 ./gradlew assembleDebug
 
 # Build release APK (requires signing.properties and explicit release metadata)
-TERMUX_APP_VERSION_NAME=2.5.1 TERMUX_APK_VERSION_TAG=v2.5.1 ./gradlew assembleRelease
+TERMUX_APP_VERSION_NAME=2.5.2 TERMUX_APK_VERSION_TAG=v2.5.2 ./gradlew assembleRelease
 
 # APKs will be in app/build/outputs/apk/
 ```

@@ -3,19 +3,19 @@
 Use the GitHub repository URL for this fork as the Obtainium source. Select the universal release asset matching:
 
 ```text
-termux-app_v2.5.1_universal.apk
+termux-app_v2.5.2_universal.apk
 ```
 
 An ABI-specific release APK may be selected instead when the device ABI is known. Production releases never include debug APKs.
 
 ## Version handling
 
-GitHub tag `v2.5.1` is built into the APK as:
+GitHub tag `v2.5.2` is built into the APK as:
 
 ```text
 applicationId = com.termux
-versionName = 2.5.1
-versionCode = 20501999
+versionName = 2.5.2
+versionCode = 20502999
 ```
 
 The release workflow checks these values inside every APK before publication. Future version codes are generated deterministically from semantic versions, so Android sees each release as an actual upgrade rather than repeatedly installing the old `1.2.3` manifest metadata.
