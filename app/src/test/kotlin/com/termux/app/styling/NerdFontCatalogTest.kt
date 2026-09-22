@@ -10,10 +10,11 @@ class NerdFontCatalogTest {
     @Test
     fun `catalog is the complete pinned v3_5_0 manifest`() {
         assertEquals(72, NerdFontCatalog.entries.size)
-        assertEquals(69, NerdFontCatalog.optionalEntries.size)
+        assertEquals(71, NerdFontCatalog.optionalEntries.size)
         assertEquals(expectedArchives, NerdFontCatalog.entries.map { it.archiveName }.toSet())
+        // Only Hack is bundled; Fira Code and JetBrains Mono are downloadable like the rest.
         assertEquals(
-            setOf("fira_code", "hack", "jetbrains_mono"),
+            setOf("hack"),
             NerdFontCatalog.entries.filter { it.bundled }.map { it.id }.toSet()
         )
     }

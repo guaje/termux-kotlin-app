@@ -39,24 +39,14 @@ class FontManagerTest {
     @Test
     fun `catalog contains only packaged built in fonts`() {
         assertEquals(
-            listOf("default", "fira_code", "hack", "jetbrains_mono"),
+            listOf("default", "hack"),
             manager.getAvailableFonts().map { it.name }
         )
     }
 
     @Test
-    fun `applying bundled font writes byte identical canonical font`() {
-        val expected = context.assets.open("fonts/FiraCode-Regular.ttf").use { it.readBytes() }
-
-        val result = manager.applyFont("fira_code")
-
-        assertTrue(result is FontManager.ApplyResult.Success)
-        assertArrayEquals(expected, canonicalFont.readBytes())
-    }
-
-    @Test
-    fun `applying bundled Hack writes byte identical canonical font`() {
-        val expected = context.assets.open("fonts/Hack-Regular.ttf").use { it.readBytes() }
+    fun `applying bundled Hack Nerd Font writes byte identical canonical font`() {
+        val expected = context.assets.open("fonts/HackNerdFontMono-Regular.ttf").use { it.readBytes() }
 
         val result = manager.applyFont("hack")
 
@@ -65,8 +55,8 @@ class FontManagerTest {
     }
 
     @Test
-    fun `default removes canonical font`() {
-        applyFiraCode()
+    fun `default deletes canonical font`() {
+        applyHack()
 
         val result = manager.applyFont("default")
 
@@ -76,7 +66,7 @@ class FontManagerTest {
 
     @Test
     fun `missing unknown and corrupt user fonts do not replace canonical font`() {
-        applyFiraCode()
+        applyHack()
         val original = canonicalFont.readBytes()
 
         assertTrue(manager.applyFont("missing-font") is FontManager.ApplyResult.Error)
@@ -90,7 +80,7 @@ class FontManagerTest {
 
     @Test
     fun `custom validates existing canonical font without rewriting it`() {
-        applyFiraCode()
+        applyHack()
         val original = canonicalFont.readBytes()
 
         val result = manager.applyFont("custom")
@@ -101,20 +91,20 @@ class FontManagerTest {
 
     @Test
     fun `restoring saved font keeps saved name when canonical bytes match`() {
-        val firaCode = context.assets.open("fonts/FiraCode-Regular.ttf").use { it.readBytes() }
+        val hackNerdFont = context.assets.open("fonts/HackNerdFontMono-Regular.ttf").use { it.readBytes() }
         canonicalFont.parentFile?.mkdirs()
-        canonicalFont.writeBytes(firaCode)
+        canonicalFont.writeBytes(hackNerdFont)
 
-        val result = manager.restoreSavedFont("fira_code")
+        val result = manager.restoreSavedFont("hack")
 
         assertTrue(result is FontManager.ApplyResult.Success)
-        assertEquals("fira_code", (result as FontManager.ApplyResult.Success).name)
-        assertArrayEquals(firaCode, canonicalFont.readBytes())
+        assertEquals("hack", (result as FontManager.ApplyResult.Success).name)
+        assertArrayEquals(hackNerdFont, canonicalFont.readBytes())
     }
 
     @Test
     fun `restoring saved font preserves a different valid manual canonical font`() {
-        val jetBrainsMono = context.assets.open("fonts/JetBrainsMono-Regular.ttf").use { it.readBytes() }
+        val jetBrainsMono = fixtureBytes("JetBrainsMono-Regular.ttf")
         canonicalFont.parentFile?.mkdirs()
         canonicalFont.writeBytes(jetBrainsMono)
 
@@ -127,19 +117,45 @@ class FontManagerTest {
 
     @Test
     fun `restoring saved font installs it when canonical font is absent`() {
-        val expected = context.assets.open("fonts/FiraCode-Regular.ttf").use { it.readBytes() }
+        val expected = context.assets.open("fonts/HackNerdFontMono-Regular.ttf").use { it.readBytes() }
 
-        val result = manager.restoreSavedFont("fira_code")
+        val result = manager.restoreSavedFont("hack")
 
         assertTrue(result is FontManager.ApplyResult.Success)
-        assertEquals("fira_code", (result as FontManager.ApplyResult.Success).name)
+        assertEquals("hack", (result as FontManager.ApplyResult.Success).name)
         assertArrayEquals(expected, canonicalFont.readBytes())
+    }
+
+    @Test
+    fun `restoring saved Hack upgrades legacy plain Hack to the bundled Nerd Font`() {
+        canonicalFont.parentFile?.mkdirs()
+        canonicalFont.writeBytes(fixtureBytes("Hack-Regular.ttf"))
+        assertTrue(manager.canonicalFontIsLegacyHack())
+
+        val result = manager.restoreSavedFont("hack")
+
+        assertTrue(result is FontManager.ApplyResult.Success)
+        assertEquals("hack", (result as FontManager.ApplyResult.Success).name)
+        assertArrayEquals(
+            context.assets.open("fonts/HackNerdFontMono-Regular.ttf").use { it.readBytes() },
+            canonicalFont.readBytes()
+        )
+    }
+
+    @Test
+    fun `legacy Hack detection ignores other fonts and missing files`() {
+        canonicalFont.parentFile?.mkdirs()
+        canonicalFont.writeBytes(fixtureBytes("FiraCode-Regular.ttf"))
+        assertFalse(manager.canonicalFontIsLegacyHack())
+
+        canonicalFont.delete()
+        assertFalse(manager.canonicalFontIsLegacyHack())
     }
 
     @Test
     fun `corrupt font install preserves existing installed font`() {
         val source = File(root, "source.ttf")
-        val validFont = context.assets.open("fonts/FiraCode-Regular.ttf").use { it.readBytes() }
+        val validFont = fixtureBytes("FiraCode-Regular.ttf")
         source.writeBytes(validFont)
         assertTrue(manager.installFont(source, "installed"))
         val destination = File(fontsDirectory, "installed.ttf")
@@ -154,7 +170,7 @@ class FontManagerTest {
     @Test
     fun `downloaded Nerd font is hidden from custom list but can be applied and removed`() {
         val source = File(root, "source.ttf")
-        val bytes = context.assets.open("fonts/FiraCode-Regular.ttf").use { it.readBytes() }
+        val bytes = fixtureBytes("FiraCode-Regular.ttf")
         source.writeBytes(bytes)
 
         assertTrue(manager.installFont(source, "nerd_0xproto", "ttf"))
@@ -172,15 +188,20 @@ class FontManagerTest {
     @Test
     fun `font install and removal reject unsafe and reserved names`() {
         val source = File(root, "source.ttf")
-        source.writeBytes(context.assets.open("fonts/FiraCode-Regular.ttf").use { it.readBytes() })
+        source.writeBytes(fixtureBytes("FiraCode-Regular.ttf"))
 
         assertFalse(manager.installFont(source, "../escape"))
         assertFalse(manager.installFont(source, "hack"))
+        // Fira Code is no longer a bundled built-in, so the name is free for user fonts.
+        assertTrue(manager.installFont(source, "fira_code"))
         assertFalse(manager.removeFont("../escape"))
         assertFalse(File(root.parentFile, "escape.ttf").exists())
     }
 
-    private fun applyFiraCode() {
-        assertTrue(manager.applyFont("fira_code") is FontManager.ApplyResult.Success)
+    private fun applyHack() {
+        assertTrue(manager.applyFont("hack") is FontManager.ApplyResult.Success)
     }
+
+    private fun fixtureBytes(name: String): ByteArray =
+        requireNotNull(javaClass.classLoader.getResourceAsStream("fonts/$name")).use { it.readBytes() }
 }

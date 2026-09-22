@@ -117,11 +117,14 @@ class StylingManager @Inject constructor(
             val savedFontName = preferences[KEY_CURRENT_FONT]
             if (savedFontName == null) {
                 // A manual font.ttf predating integrated Styling remains authoritative until the
-                // user explicitly selects another font.
-                when (val customResult = fontManager.applyFont("custom")) {
+                // user explicitly selects another font. The one exception is the legacy plain
+                // Hack written by older builds, which upgrades to the bundled Nerd Font so icon
+                // glyphs (e.g. starship prompts) render.
+                val initialFont = if (fontManager.canonicalFontIsLegacyHack()) "hack" else "custom"
+                when (val customResult = fontManager.applyFont(initialFont)) {
                     is FontManager.ApplyResult.Success -> {
                         currentFont = customResult.typeface
-                        dataStore.edit { it[KEY_CURRENT_FONT] = "custom" }
+                        dataStore.edit { it[KEY_CURRENT_FONT] = initialFont }
                     }
                     is FontManager.ApplyResult.Error -> resetInvalidCanonicalFont(customResult.message)
                 }

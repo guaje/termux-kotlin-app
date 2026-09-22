@@ -54,7 +54,7 @@ class StylingManagerTest {
 
     @Test
     fun `initialize without saved selection preserves valid manual canonical font`() = runTest {
-        val manualFont = assetBytes("fonts/JetBrainsMono-Regular.ttf")
+        val manualFont = fixtureBytes("JetBrainsMono-Regular.ttf")
         canonicalFont.parentFile?.mkdirs()
         canonicalFont.writeBytes(manualFont)
 
@@ -66,8 +66,34 @@ class StylingManagerTest {
     }
 
     @Test
+    fun `initialize without saved selection upgrades legacy canonical Hack to bundled Nerd Font`() = runTest {
+        canonicalFont.parentFile?.mkdirs()
+        canonicalFont.writeBytes(fixtureBytes("Hack-Regular.ttf"))
+
+        val manager = newManager()
+        manager.initialize()
+
+        assertEquals("hack", manager.getCurrentSettings().fontName)
+        assertArrayEquals(assetBytes("fonts/HackNerdFontMono-Regular.ttf"), canonicalFont.readBytes())
+    }
+
+    @Test
+    fun `initialize with saved Hack selection upgrades legacy canonical Hack to bundled Nerd Font`() = runTest {
+        val firstManager = newManager()
+        assertTrue(firstManager.setFont("hack") is FontManager.ApplyResult.Success)
+        // Simulate the canonical font left behind by an older build: the legacy plain Hack.
+        canonicalFont.writeBytes(fixtureBytes("Hack-Regular.ttf"))
+
+        val restoredManager = newManager()
+        restoredManager.initialize()
+
+        assertEquals("hack", restoredManager.getCurrentSettings().fontName)
+        assertArrayEquals(assetBytes("fonts/HackNerdFontMono-Regular.ttf"), canonicalFont.readBytes())
+    }
+
+    @Test
     fun `initialize keeps saved custom selection and canonical font`() = runTest {
-        val manualFont = assetBytes("fonts/JetBrainsMono-Regular.ttf")
+        val manualFont = fixtureBytes("JetBrainsMono-Regular.ttf")
         canonicalFont.parentFile?.mkdirs()
         canonicalFont.writeBytes(manualFont)
         val firstManager = newManager()
@@ -83,21 +109,21 @@ class StylingManagerTest {
     @Test
     fun `initialize restores saved bundled font when canonical font is absent`() = runTest {
         val firstManager = newManager()
-        firstManager.setFont("fira_code")
+        firstManager.setFont("hack")
         assertTrue(canonicalFont.delete())
 
         val restoredManager = newManager()
         restoredManager.initialize()
 
-        assertEquals("fira_code", restoredManager.getCurrentSettings().fontName)
-        assertArrayEquals(assetBytes("fonts/FiraCode-Regular.ttf"), canonicalFont.readBytes())
+        assertEquals("hack", restoredManager.getCurrentSettings().fontName)
+        assertArrayEquals(assetBytes("fonts/HackNerdFontMono-Regular.ttf"), canonicalFont.readBytes())
     }
 
     @Test
     fun `initialize corrects saved selection to custom without overwriting manual font`() = runTest {
         val firstManager = newManager()
-        firstManager.setFont("fira_code")
-        val manualFont = assetBytes("fonts/JetBrainsMono-Regular.ttf")
+        firstManager.setFont("hack")
+        val manualFont = fixtureBytes("JetBrainsMono-Regular.ttf")
         canonicalFont.writeBytes(manualFont)
 
         val restoredManager = newManager()
@@ -121,7 +147,7 @@ class StylingManagerTest {
 
     @Test
     fun `optional font download installs applies and persists selection`() = runTest {
-        val bytes = assetBytes("fonts/FiraCode-Regular.ttf")
+        val bytes = fixtureBytes("FiraCode-Regular.ttf")
         val client = FakeDownloadClient(bytes)
         val manager = newManager(client)
 
@@ -135,22 +161,36 @@ class StylingManagerTest {
     }
 
     @Test
+    fun `formerly bundled fonts are downloadable through the catalog`() = runTest {
+        val manager = newManager(FakeDownloadClient(fixtureBytes("FiraCode-Regular.ttf")))
+
+        val firaResult = manager.downloadInstallAndApplyNerdFont("fira_code")
+        val jetBrainsResult = manager.downloadInstallAndApplyNerdFont("jetbrains_mono")
+
+        assertTrue(firaResult is OptionalFontResult.Success)
+        assertTrue(jetBrainsResult is OptionalFontResult.Success)
+        assertEquals("nerd_jetbrains_mono", manager.getCurrentSettings().fontName)
+        assertTrue(File(fontsDirectory, "nerd_fira_code.ttf").isFile)
+        assertTrue(File(fontsDirectory, "nerd_jetbrains_mono.ttf").isFile)
+    }
+
+    @Test
     fun `optional font download failure preserves selected font and canonical bytes`() = runTest {
         val manager = newManager(FakeDownloadClient(failure = IllegalStateException("offline")))
-        assertTrue(manager.setFont("fira_code") is FontManager.ApplyResult.Success)
+        assertTrue(manager.setFont("hack") is FontManager.ApplyResult.Success)
         val before = canonicalFont.readBytes()
 
         val result = manager.downloadInstallAndApplyNerdFont("0xproto")
 
         assertTrue(result is OptionalFontResult.Error)
-        assertEquals("fira_code", manager.getCurrentSettings().fontName)
+        assertEquals("hack", manager.getCurrentSettings().fontName)
         assertArrayEquals(before, canonicalFont.readBytes())
         assertFalse(File(fontsDirectory, "nerd_0xproto.ttf").exists())
     }
 
     @Test
     fun `initialize never downloads a missing persisted optional font`() = runTest {
-        val firstClient = FakeDownloadClient(assetBytes("fonts/FiraCode-Regular.ttf"))
+        val firstClient = FakeDownloadClient(fixtureBytes("FiraCode-Regular.ttf"))
         val firstManager = newManager(firstClient)
         assertTrue(firstManager.downloadInstallAndApplyNerdFont("0xproto") is OptionalFontResult.Success)
         assertTrue(File(fontsDirectory, "nerd_0xproto.ttf").delete())
@@ -167,10 +207,10 @@ class StylingManagerTest {
 
     @Test
     fun `optional status snapshot and installed apply cover every state`() = runTest {
-        val manager = newManager(FakeDownloadClient(assetBytes("fonts/FiraCode-Regular.ttf")))
+        val manager = newManager(FakeDownloadClient(fixtureBytes("FiraCode-Regular.ttf")))
         assertTrue(manager.downloadInstallAndApplyNerdFont("0xproto") is OptionalFontResult.Success)
         val source = File(root, "agave.ttf").apply {
-            writeBytes(assetBytes("fonts/JetBrainsMono-Regular.ttf"))
+            writeBytes(fixtureBytes("JetBrainsMono-Regular.ttf"))
         }
         assertTrue(FontManager(context, canonicalFont, fontsDirectory).installFont(source, "nerd_agave"))
 
@@ -178,7 +218,12 @@ class StylingManagerTest {
         assertEquals(NerdFontStatus.Selected, statuses["0xproto"])
         assertEquals(NerdFontStatus.Installed, statuses["agave"])
         assertEquals(NerdFontStatus.Downloadable, statuses["3270"])
+        // Fira Code and JetBrains Mono are downloadable now that they are not bundled.
+        assertEquals(NerdFontStatus.Downloadable, statuses["fira_code"])
+        assertEquals(NerdFontStatus.Downloadable, statuses["jetbrains_mono"])
         assertEquals(NerdFontStatus.Unsupported, statuses["nerdfontssymbolsonly"])
+        // Bundled Hack is not part of the downloadable catalog.
+        assertFalse(statuses.containsKey("hack"))
 
         assertTrue(manager.applyNerdFont("agave") is OptionalFontResult.Success)
         assertEquals("nerd_agave", manager.getCurrentSettings().fontName)
@@ -187,7 +232,7 @@ class StylingManagerTest {
 
     @Test
     fun `removing selected optional font resets persisted selection to default first`() = runTest {
-        val manager = newManager(FakeDownloadClient(assetBytes("fonts/FiraCode-Regular.ttf")))
+        val manager = newManager(FakeDownloadClient(fixtureBytes("FiraCode-Regular.ttf")))
         assertTrue(manager.downloadInstallAndApplyNerdFont("0xproto") is OptionalFontResult.Success)
 
         val result = manager.removeNerdFont("0xproto")
@@ -200,7 +245,7 @@ class StylingManagerTest {
 
     @Test
     fun `concurrent requests for same optional font download once`() = runTest {
-        val client = FakeDownloadClient(assetBytes("fonts/FiraCode-Regular.ttf"), delayMillis = 10)
+        val client = FakeDownloadClient(fixtureBytes("FiraCode-Regular.ttf"), delayMillis = 10)
         val manager = newManager(client)
 
         val results = listOf(
@@ -239,4 +284,7 @@ class StylingManagerTest {
     }
 
     private fun assetBytes(path: String): ByteArray = context.assets.open(path).use { it.readBytes() }
+
+    private fun fixtureBytes(name: String): ByteArray =
+        requireNotNull(javaClass.classLoader.getResourceAsStream("fonts/$name")).use { it.readBytes() }
 }
