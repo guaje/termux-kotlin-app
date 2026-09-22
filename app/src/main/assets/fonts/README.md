@@ -1,20 +1,27 @@
 # Bundled terminal fonts
 
-These unmodified fonts are bundled for the integrated Termux:Styling picker.
+The integrated Termux:Styling picker embeds exactly one font: the terminal-safe
+**Nerd Font Mono** variant of Hack. All other families — including Fira Code and
+JetBrains Mono, which older builds bundled — are explicit, user-initiated downloads
+from the pinned [Nerd Fonts v3.5.0 release](https://github.com/ryanoasis/nerd-fonts/releases/tag/v3.5.0).
 
-| Asset | Upstream source | Revision | SHA-256 |
-|---|---|---|---|
-| `FiraCode-Regular.ttf` | https://github.com/tonsky/FiraCode/blob/5.2/distr/ttf/FiraCode-Regular.ttf | Fira Code 5.2 | `28c3ae21a853f1d74673384c7a0d620abb0e877b8c6cd8b64173a95512476824` |
-| `JetBrainsMono-Regular.ttf` | https://github.com/JetBrains/JetBrainsMono/blob/02bb50b082dad9ef8a0f33ac393839202b760223/fonts/ttf/JetBrainsMono-Regular.ttf | `02bb50b082dad9ef8a0f33ac393839202b760223` | `e6fd0d7e91550b3ed2b735d4312474362c4716edc4fc0577a0f61ed782d5aed1` |
-| `Hack-Regular.ttf` | https://github.com/source-foundry/Hack/releases/download/v3.003/Hack-v3.003-ttf.zip (`ttf/Hack-Regular.ttf`) | Hack v3.003 | `15f55cc0c85a2988d2b4b3a8cdb5d77fdfbaf319e1bb5309d725db9818fb7125` |
+| Asset | Upstream source | SHA-256 |
+|---|---|---|
+| `HackNerdFontMono-Regular.ttf` | [Hack.zip](https://github.com/ryanoasis/nerd-fonts/releases/download/v3.5.0/Hack.zip) (archive `24a54aa41ff8ca5829409bfeb1bc2883b9fcafbf79f8d4b7674898550cb5e3b3`) → `HackNerdFontMono-Regular.ttf` | `28a157c93f850c603faf77819654925fdaf3abc431aefcb6f89ecb08d22f0a3e` |
 
-Fira Code and JetBrains Mono are distributed under the SIL Open Font License 1.1.
-Hack v3.003 is distributed under the MIT License and the Bitstream Vera License;
-the exact applicable dual-license text is in [`licenses/Hack-LICENSE.md`](licenses/Hack-LICENSE.md).
-
-Only Hack, Fira Code, and JetBrains Mono are embedded. All other Nerd Fonts are
-explicit, user-initiated downloads from the pinned [Nerd Fonts v3.5.0
-release](https://github.com/ryanoasis/nerd-fonts/releases/tag/v3.5.0). Those archives
-may be large and remain subject to the licenses documented by Nerd Fonts in its
+Because the bundled face is a full Nerd Font, icon glyphs used by prompts such as
+starship render out of the box. It is distributed under Hack's MIT / Bitstream Vera
+dual license (see [`licenses/Hack-LICENSE.md`](licenses/Hack-LICENSE.md)) plus the
+symbol licenses documented in the Nerd Fonts
 [license audit](https://github.com/ryanoasis/nerd-fonts/blob/v3.5.0/license-audit.md).
-Downloaded archives are checksum-verified before one regular terminal face is installed.
+
+Older builds embedded plain `Hack-Regular.ttf`, `FiraCode-Regular.ttf`, and
+`JetBrainsMono-Regular.ttf` as built-ins. Existing installations still carrying the
+legacy plain Hack as the selected or canonical font are upgraded automatically to
+the bundled Nerd Font when Styling restores the selection; plain Fira Code and
+JetBrains Mono selections are preserved as "Custom (font.ttf)" and their Nerd Font
+variants can be downloaded from the catalog.
+
+Downloaded archives are checksum-verified before one regular terminal face is
+installed, and may be large and remain subject to the licenses documented by
+Nerd Fonts in its [license audit](https://github.com/ryanoasis/nerd-fonts/blob/v3.5.0/license-audit.md).

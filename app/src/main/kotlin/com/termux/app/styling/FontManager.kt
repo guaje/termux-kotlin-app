@@ -40,11 +40,13 @@ class FontManager @Inject constructor(
         data class Error(val name: String, val message: String) : ApplyResult()
     }
 
+    // The bundled Hack face is the Nerd Font Mono variant from the pinned v3.5.0
+    // release (the same archive the Nerd Font catalog downloads), so icon glyphs in
+    // prompts like starship render without any download. Fira Code and JetBrains Mono
+    // are no longer bundled; they are downloadable through the Nerd Font catalog.
     private val bundledFonts = listOf(
         FontInfo("default", "Default (system monospace)", isBuiltIn = true),
-        FontInfo("fira_code", "Fira Code", isBuiltIn = true, path = "fonts/FiraCode-Regular.ttf"),
-        FontInfo("hack", "Hack", isBuiltIn = true, path = "fonts/Hack-Regular.ttf"),
-        FontInfo("jetbrains_mono", "JetBrains Mono", isBuiltIn = true, path = "fonts/JetBrainsMono-Regular.ttf")
+        FontInfo("hack", "Hack", isBuiltIn = true, path = "fonts/HackNerdFontMono-Regular.ttf")
     )
 
     @Volatile
@@ -98,6 +100,11 @@ class FontManager @Inject constructor(
      * never overwritten during migration.
      */
     fun restoreSavedFont(name: String): ApplyResult {
+        // Older builds bundled plain Hack; upgrade a saved Hack selection to the bundled
+        // Nerd Font Mono variant so icon glyphs (e.g. starship prompts) render.
+        if (name == "hack" && canonicalFontIsLegacyHack()) {
+            return rememberSuccessful(applyBundledOrUserFont("hack"))
+        }
         val canonical = loadCanonicalFont()
         if (canonical is ApplyResult.Success) {
             val restored = when {
@@ -109,6 +116,21 @@ class FontManager @Inject constructor(
         }
         return applyFont(name)
     }
+
+    /**
+     * SHA-256 of the plain Hack v3.003 Regular face that older builds bundled as the
+     * built-in "hack" font and wrote to the canonical font.ttf slot.
+     */
+    private val legacyBundledHackSha256: ByteArray =
+        "15f55cc0c85a2988d2b4b3a8cdb5d77fdfbaf319e1bb5309d725db9818fb7125"
+            .chunked(2)
+            .map { it.toInt(16).toByte() }
+            .toByteArray()
+
+    /** True when the canonical font file is the legacy plain Hack bundled by older builds. */
+    fun canonicalFontIsLegacyHack(): Boolean = canonicalFontFile.isFile && runCatching {
+        FileInputStream(canonicalFontFile).use(::sha256).contentEquals(legacyBundledHackSha256)
+    }.getOrDefault(false)
 
     fun getCurrentFont(): Typeface = currentFont
 
@@ -356,7 +378,7 @@ class FontManager @Inject constructor(
         const val SFNT_VERSION_TRUE = 0x74727565
         const val SFNT_VERSION_TYP1 = 0x74797031
         const val NERD_FONT_PREFIX = "nerd_"
-        val reservedFontNames = setOf("default", "custom", "fira_code", "hack", "jetbrains_mono")
+        val reservedFontNames = setOf("default", "custom", "hack")
         val SAFE_USER_FONT_NAME = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
     }
 }

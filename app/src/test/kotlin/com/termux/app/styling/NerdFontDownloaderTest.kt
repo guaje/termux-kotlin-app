@@ -128,7 +128,7 @@ class NerdFontDownloaderTest {
 
     @Test
     fun `valid pinned archive extracts regular Mono face and cleans archive`() = runTest {
-        val expected = assetBytes("fonts/FiraCode-Regular.ttf")
+        val expected = fixtureBytes("FiraCode-Regular.ttf")
         val archive = zipOf("nested/TestNerdFontMono-Regular.ttf" to expected)
         val provider = BytesProvider(archive)
         val downloader = NerdFontDownloader(context, provider)
@@ -148,8 +148,8 @@ class NerdFontDownloaderTest {
 
     @Test
     fun `Mono face wins deterministically over alphabetically earlier fallback`() = runTest {
-        val fallback = assetBytes("fonts/JetBrainsMono-Regular.ttf")
-        val expected = assetBytes("fonts/FiraCode-Regular.ttf")
+        val fallback = fixtureBytes("JetBrainsMono-Regular.ttf")
+        val expected = fixtureBytes("FiraCode-Regular.ttf")
         val archive = zipOf(
             "AardvarkNerdFont-Regular.ttf" to fallback,
             "ZuluNerdFontMono-Regular.ttf" to expected
@@ -165,7 +165,7 @@ class NerdFontDownloaderTest {
 
     @Test
     fun `proportional regular fallback is supported when archive has no Mono face`() = runTest {
-        val expected = assetBytes("fonts/Hack-Regular.ttf")
+        val expected = fixtureBytes("Hack-Regular.ttf")
         val archive = zipOf("ArimoNerdFont-Regular.ttf" to expected)
 
         val downloaded = NerdFontDownloader(context, BytesProvider(archive))
@@ -178,7 +178,7 @@ class NerdFontDownloaderTest {
 
     @Test
     fun `SHA mismatch is rejected and temporary files are cleaned`() = runTest {
-        val archive = zipOf("TestNerdFontMono-Regular.ttf" to assetBytes("fonts/FiraCode-Regular.ttf"))
+        val archive = zipOf("TestNerdFontMono-Regular.ttf" to fixtureBytes("FiraCode-Regular.ttf"))
         val entry = entryFor(archive).copy(archiveSha256 = "f".repeat(64))
 
         val result = NerdFontDownloader(context, BytesProvider(archive)).download(entry)
@@ -213,7 +213,7 @@ class NerdFontDownloaderTest {
     fun `unsafe archive path is rejected even when valid font exists`() = runTest {
         val archive = zipOf(
             "../escape.txt" to "escape".toByteArray(),
-            "TestNerdFontMono-Regular.ttf" to assetBytes("fonts/FiraCode-Regular.ttf")
+            "TestNerdFontMono-Regular.ttf" to fixtureBytes("FiraCode-Regular.ttf")
         )
 
         val result = NerdFontDownloader(context, BytesProvider(archive)).download(entryFor(archive))
@@ -278,7 +278,8 @@ class NerdFontDownloaderTest {
         .digest(bytes)
         .joinToString("") { "%02x".format(it) }
 
-    private fun assetBytes(path: String): ByteArray = context.assets.open(path).use { it.readBytes() }
+    private fun fixtureBytes(name: String): ByteArray =
+        requireNotNull(javaClass.classLoader.getResourceAsStream("fonts/$name")).use { it.readBytes() }
 
     private fun assertCacheEmpty() {
         assertTrue(cacheDirectory.listFiles().isNullOrEmpty())
