@@ -1,3 +1,15 @@
+## [2026-09-22] Build #78
+
+### Changes
+- a142648 Prepare v2.5.2 release metadata (#17)
+
+### Build Status
+- Prefix Validation: success
+- APK Build: success
+- Emulator Tests: skipped
+
+---
+
 ## [2026-09-22] Build #76
 
 ### Changes
