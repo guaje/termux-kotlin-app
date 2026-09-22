@@ -1,3 +1,15 @@
+## [2026-09-22] Build #74
+
+### Changes
+- b905407 Restore stock login script so shell init files load on startup (#15)
+
+### Build Status
+- Prefix Validation: success
+- APK Build: success
+- Emulator Tests: skipped
+
+---
+
 ## [2026-08-13] Build #32
 
 ### Changes
