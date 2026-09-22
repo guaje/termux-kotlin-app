@@ -1,0 +1,7 @@
+Termux Kotlin v2.5.2
+
+- Restore the stock login script so ~/.bashrc and shell init files load on startup.
+- Bundle the Hack Nerd Font so starship and Nerd Font icons render out of the box.
+- Move Fira Code and JetBrains Mono to checksum-verified Nerd Font downloads.
+- Upgrade existing plain-Hack installs to the bundled Nerd Font automatically.
+- Preserve existing Termux data, custom fonts, and settings during upgrades.
