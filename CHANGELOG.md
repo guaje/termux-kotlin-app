@@ -1,3 +1,15 @@
+## [2026-09-22] Build #76
+
+### Changes
+- 5aef90f Bundle Hack Nerd Font and move Fira Code and JetBrains Mono to downloads (#16)
+
+### Build Status
+- Prefix Validation: success
+- APK Build: success
+- Emulator Tests: skipped
+
+---
+
 ## [2026-09-22] Build #74
 
 ### Changes
