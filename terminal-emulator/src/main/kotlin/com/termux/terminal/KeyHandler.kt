@@ -226,11 +226,70 @@ object KeyHandler {
     }
 
     /**
-     * Map an Android [keyCode] + [keyMod] to a Kitty CSI-u sequence when the
-     * terminal has Kitty keyboard mode enabled.
+     * Legacy functional keys (kitty spec, "Legacy functional keys"): arrows, Home/End,
+     * PageUp/PageDown, Insert/Delete and F1-F12 keep the `CSI 1;modifier [ABCDEFHPQS]` /
+     * `CSI number;modifier ~` / `SS3 key` forms in every kitty mode and never use CSI-u.
+     * Value: (CSI number, final character) used for the event-type augmented forms.
+     */
+    private val LEGACY_FUNCTIONAL_KEYS: Map<Int, Pair<Int, Char>> = mapOf(
+        KEYCODE_DPAD_UP to (1 to 'A'),
+        KEYCODE_DPAD_DOWN to (1 to 'B'),
+        KEYCODE_DPAD_RIGHT to (1 to 'C'),
+        KEYCODE_DPAD_LEFT to (1 to 'D'),
+        KEYCODE_MOVE_HOME to (1 to 'H'),
+        KEYCODE_MOVE_END to (1 to 'F'),
+        KEYCODE_F1 to (1 to 'P'),
+        KEYCODE_F2 to (1 to 'Q'),
+        KEYCODE_F3 to (1 to 'R'),
+        KEYCODE_F4 to (1 to 'S'),
+        KEYCODE_INSERT to (2 to '~'),
+        KEYCODE_FORWARD_DEL to (3 to '~'),
+        KEYCODE_PAGE_UP to (5 to '~'),
+        KEYCODE_PAGE_DOWN to (6 to '~'),
+        KEYCODE_F5 to (15 to '~'),
+        KEYCODE_F6 to (17 to '~'),
+        KEYCODE_F7 to (18 to '~'),
+        KEYCODE_F8 to (19 to '~'),
+        KEYCODE_F9 to (20 to '~'),
+        KEYCODE_F10 to (21 to '~'),
+        KEYCODE_F11 to (23 to '~'),
+        KEYCODE_F12 to (24 to '~'),
+        KEYCODE_SYSRQ to (32 to '~'),
+        KEYCODE_BREAK to (34 to '~')
+    )
+
+    /**
+     * Non-text keypad keys (kitty spec functional key table) that switch to dedicated
+     * CSI-u codes under the disambiguate flag so apps can tell them apart from their
+     * equivalent non-keypad keys. NumLock-locked digits and operators remain text keys;
+     * keypad Enter is never a text key.
+     */
+    private val KITTY_KEYPAD_CODES: Map<Int, Int> = mapOf(
+        KEYCODE_NUMPAD_0 to 57425, // KP_INSERT
+        KEYCODE_NUMPAD_1 to 57424, // KP_END
+        KEYCODE_NUMPAD_2 to 57420, // KP_DOWN
+        KEYCODE_NUMPAD_3 to 57422, // KP_PAGE_DOWN
+        KEYCODE_NUMPAD_4 to 57417, // KP_LEFT
+        KEYCODE_NUMPAD_6 to 57418, // KP_RIGHT
+        KEYCODE_NUMPAD_7 to 57423, // KP_HOME
+        KEYCODE_NUMPAD_8 to 57419, // KP_UP
+        KEYCODE_NUMPAD_9 to 57421, // KP_PAGE_UP
+        KEYCODE_NUMPAD_DOT to 57426, // KP_DELETE
+        KEYCODE_NUMPAD_ENTER to 57414, // KP_ENTER
+        KEYCODE_NUMPAD_ADD to 57413, // KP_ADD
+        KEYCODE_NUMPAD_SUBTRACT to 57412, // KP_SUBTRACT
+        KEYCODE_NUMPAD_MULTIPLY to 57411, // KP_MULTIPLY
+        KEYCODE_NUMPAD_DIVIDE to 57410, // KP_DIVIDE
+        KEYCODE_NUMPAD_EQUALS to 57415, // KP_EQUAL
+        KEYCODE_NUMPAD_COMMA to 57416 // KP_SEPARATOR
+    )
+
+    /**
+     * Map an Android [keyCode] + [keyMod] to a Kitty sequence when the terminal has Kitty
+     * keyboard mode enabled.
      *
-     * @return non-null CSI-u string if the key should be sent in kitty format,
-     *         null if legacy handling should be used.
+     * @return the Kitty-encoded sequence if the key must be encoded differently from the
+     *         legacy [getCode] form, or null if legacy handling should be used.
      *
      * Supported progressive-enhancement flags:
      *   - 1: disambiguate escape codes
@@ -248,37 +307,87 @@ object KeyHandler {
         unicodeCodePoint: Int = 0,
         eventType: Int = 1
     ): String? {
-        if (kittyFlags and KITTY_FLAG_DISAMBIGUATE == 0) return null
+        // Report-all implies disambiguation (kitty spec).
+        if (kittyFlags and (KITTY_FLAG_DISAMBIGUATE or KITTY_FLAG_REPORT_ALL) == 0) return null
 
         val modifier = kittyModifier(keyMod)
+        val reportAll = (kittyFlags and KITTY_FLAG_REPORT_ALL) != 0
+        val reportsEventTypes = (kittyFlags and KITTY_FLAG_REPORT_EVENT_TYPES) != 0
+        val normalizedEventType = eventType.coerceIn(1, 3)
+        val numLockOn = (keyMod and KEYMOD_NUM_LOCK) != 0
+
+        // Legacy functional keys never use CSI-u; presses keep the legacy encoding from
+        // getCode(). With event types enabled, repeat/release events use the legacy
+        // functional form with an event-type sub-field (kitty spec, "Event types"):
+        //   CSI 1;modifier:event [ABCDEFHPQS] / CSI number;modifier:event ~
+        LEGACY_FUNCTIONAL_KEYS[keyCode]?.let { (number, finalChar) ->
+            return if (reportsEventTypes && normalizedEventType != 1) {
+                "\u001b[$number;${modifier + 1}:$normalizedEventType$finalChar"
+            } else {
+                null
+            }
+        }
+
+        // Non-text keypad keys switch to their dedicated CSI-u codes under the
+        // disambiguate flag (kitty spec); NumLock-locked digits/operators stay text.
+        if (!numLockOn || keyCode == KEYCODE_NUMPAD_ENTER) {
+            KITTY_KEYPAD_CODES[keyCode]?.let { code ->
+                return buildCsiUSequence(code, modifier, kittyFlags, 0, reportsEventTypes, normalizedEventType)
+            }
+        }
+
+        // Unmodified Enter, Tab, Backspace and Space keep their legacy bytes in every mode
+        // except report-all (kitty spec, "Disambiguate escape codes"), so the user can still
+        // type commands such as `reset` at a shell prompt after a program crashes without
+        // clearing kitty mode. They also get no repeat/release events without report-all
+        // (kitty spec, "Report event types").
+        if (!reportAll && modifier == 0 &&
+            (keyCode == KEYCODE_ENTER || keyCode == KEYCODE_TAB || keyCode == KEYCODE_DEL ||
+                keyCode == KEYCODE_SPACE)
+        ) {
+            return null
+        }
+
         val specialCode = kittyKeyCode(keyCode, 0)
         val printableCode = unicodeCodePoint.takeIf { Character.isValidCodePoint(it) && it >= 32 }
         val shouldReportPrintable = (kittyFlags and KITTY_FLAG_REPORT_ALL) != 0 ||
             (modifier and (2 or 4 or 8 or 16 or 32)) != 0
         val code = specialCode ?: printableCode?.takeIf { shouldReportPrintable } ?: return null
-        val sb = StringBuilder().appendCodePoint(0x1B).append('[')
+        return buildCsiUSequence(code, modifier, kittyFlags, unicodeCodePoint, reportsEventTypes, normalizedEventType)
+    }
 
-        // Primary key code
-        sb.append(code)
+    /**
+     * Build the Kitty CSI-u sequence: `CSI code[:shifted] [;modifier[:event]] u`.
+     * Press is the default event type and is omitted; modifiers are one plus the
+     * Kitty modifier bit mask.
+     */
+    private fun buildCsiUSequence(
+        code: Int,
+        modifier: Int,
+        kittyFlags: Int,
+        unicodeCodePoint: Int,
+        reportsEventTypes: Boolean,
+        eventType: Int
+    ): String {
+        val sb = StringBuilder().appendCodePoint(0x1B).append('[').append(code)
 
-        // Alternate / shifted key code (flag 4)
-        val shifted = if ((kittyFlags and KITTY_FLAG_REPORT_ALTERNATES) != 0 && unicodeCodePoint > 0 && unicodeCodePoint != code) {
+        // Alternate / shifted key code (flag 4) — only present with shift per spec.
+        val shifted = if ((kittyFlags and KITTY_FLAG_REPORT_ALTERNATES) != 0 &&
+            unicodeCodePoint > 0 && unicodeCodePoint != code
+        ) {
             unicodeCodePoint
-        } else null
-
-        if (shifted != null && shifted != code) {
+        } else {
+            null
+        }
+        if (shifted != null) {
             sb.append(':').append(shifted)
         }
 
-        // Base layout code could be appended as third field if we tracked it; omitted here.
-
-        val reportsEventTypes = (kittyFlags and KITTY_FLAG_REPORT_EVENT_TYPES) != 0
-        val normalizedEventType = eventType.coerceIn(1, 3)
-        if (modifier > 0 || (reportsEventTypes && normalizedEventType != 1)) {
+        if (modifier > 0 || (reportsEventTypes && eventType != 1)) {
             // Kitty encodes modifiers as one plus the bit mask; 1 means no modifiers.
             sb.append(';').append(modifier + 1)
-            if (reportsEventTypes && normalizedEventType != 1) {
-                sb.append(':').append(normalizedEventType)
+            if (reportsEventTypes && eventType != 1) {
+                sb.append(':').append(eventType)
             }
         }
 

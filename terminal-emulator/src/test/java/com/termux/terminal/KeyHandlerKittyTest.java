@@ -134,43 +134,67 @@ public class KeyHandlerKittyTest extends TestCase {
         assertEquals("\u001b[120;8u", seq);
     }
 
+    // ========== getKittyKeyCode: legacy functional keys never use CSI-u ==========
+
     public void testGetKittyKeyCodeArrowUpNoMod() {
-        String seq = KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_DPAD_UP, 0,
-            KeyHandler.KITTY_FLAG_DISAMBIGUATE, 0);
-        assertEquals("\u001b[57352u", seq);
+        // Kitty spec, "Legacy functional keys": arrows keep the legacy encodings in every
+        // mode; presses fall back to the legacy form from getCode().
+        assertNull(KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_DPAD_UP, 0,
+            KeyHandler.KITTY_FLAG_DISAMBIGUATE, 0));
     }
 
     public void testGetKittyKeyCodeArrowDownWithShift() {
-        String seq = KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_DPAD_DOWN, KeyHandler.KEYMOD_SHIFT,
-            KeyHandler.KITTY_FLAG_DISAMBIGUATE, 0);
-        assertEquals("\u001b[57353;2u", seq);
+        assertNull(KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_DPAD_DOWN, KeyHandler.KEYMOD_SHIFT,
+            KeyHandler.KITTY_FLAG_DISAMBIGUATE, 0));
     }
 
     public void testGetKittyKeyCodeHomeWithCtrl() {
-        String seq = KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_MOVE_HOME, KeyHandler.KEYMOD_CTRL,
-            KeyHandler.KITTY_FLAG_DISAMBIGUATE, 0);
-        assertEquals("\u001b[57356;5u", seq);
+        assertNull(KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_MOVE_HOME, KeyHandler.KEYMOD_CTRL,
+            KeyHandler.KITTY_FLAG_DISAMBIGUATE, 0));
     }
 
     public void testGetKittyKeyCodeEndWithShiftAlt() {
         int mods = KeyHandler.KEYMOD_SHIFT | KeyHandler.KEYMOD_ALT;
-        String seq = KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_MOVE_END, mods,
-            KeyHandler.KITTY_FLAG_DISAMBIGUATE, 0);
-        assertEquals("\u001b[57357;4u", seq);
+        assertNull(KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_MOVE_END, mods,
+            KeyHandler.KITTY_FLAG_DISAMBIGUATE, 0));
     }
 
     public void testGetKittyKeyCodePageUpWithCtrlShift() {
         int mods = KeyHandler.KEYMOD_CTRL | KeyHandler.KEYMOD_SHIFT;
-        String seq = KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_PAGE_UP, mods,
-            KeyHandler.KITTY_FLAG_DISAMBIGUATE, 0);
-        assertEquals("\u001b[57354;6u", seq);
+        assertNull(KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_PAGE_UP, mods,
+            KeyHandler.KITTY_FLAG_DISAMBIGUATE, 0));
     }
 
     public void testGetKittyKeyCodePageDownWithAltCtrl() {
         int mods = KeyHandler.KEYMOD_ALT | KeyHandler.KEYMOD_CTRL;
-        String seq = KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_PAGE_DOWN, mods,
-            KeyHandler.KITTY_FLAG_DISAMBIGUATE, 0);
-        assertEquals("\u001b[57355;7u", seq);
+        assertNull(KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_PAGE_DOWN, mods,
+            KeyHandler.KITTY_FLAG_DISAMBIGUATE, 0));
+    }
+
+    public void testLegacyFunctionalRepeatAndReleaseUseLegacyFormWithEvent() {
+        // Event-type augmented legacy functional form (kitty spec, "Event types"):
+        // repeat and release get the event as a sub-field of the modifiers field.
+        int flags = KeyHandler.KITTY_FLAG_DISAMBIGUATE | KeyHandler.KITTY_FLAG_REPORT_EVENT_TYPES;
+        assertEquals("\u001b[1;1:2A", KeyHandler.getKittyKeyCode(
+            KeyEvent.KEYCODE_DPAD_UP, 0, flags, 0, 2));
+        assertEquals("\u001b[1;1:3D", KeyHandler.getKittyKeyCode(
+            KeyEvent.KEYCODE_DPAD_LEFT, 0, flags, 0, 3));
+        assertEquals("\u001b[1;5:3D", KeyHandler.getKittyKeyCode(
+            KeyEvent.KEYCODE_DPAD_LEFT, KeyHandler.KEYMOD_CTRL, flags, 0, 3));
+        assertEquals("\u001b[3;1:3~", KeyHandler.getKittyKeyCode(
+            KeyEvent.KEYCODE_FORWARD_DEL, 0, flags, 0, 3));
+        assertEquals("\u001b[5;1:2~", KeyHandler.getKittyKeyCode(
+            KeyEvent.KEYCODE_PAGE_UP, 0, flags, 0, 2));
+        assertEquals("\u001b[1;1:3P", KeyHandler.getKittyKeyCode(
+            KeyEvent.KEYCODE_F1, 0, flags, 0, 3));
+    }
+
+    public void testLegacyFunctionalRepeatIsPressWithoutEventTypes() {
+        // Without the report-event-types flag, repeats fall back to the legacy press form.
+        assertNull(KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_DPAD_UP, 0,
+            KeyHandler.KITTY_FLAG_DISAMBIGUATE, 0, 2));
+        assertNull(KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_DPAD_UP, 0,
+            KeyHandler.KITTY_FLAG_DISAMBIGUATE, 0, 3));
     }
 
     // ========== REPORT_ALTERNATES (level 2) ==========
@@ -193,11 +217,12 @@ public class KeyHandlerKittyTest extends TestCase {
     }
 
     public void testRepeatAndReleaseEventEncoding() {
+        // Text keys with modifiers report repeat/release via the event sub-field.
         int flags = KeyHandler.KITTY_FLAG_DISAMBIGUATE | KeyHandler.KITTY_FLAG_REPORT_EVENT_TYPES;
-        assertEquals("\u001b[57352;1:2u", KeyHandler.getKittyKeyCode(
-            KeyEvent.KEYCODE_DPAD_UP, 0, flags, 0, 2));
-        assertEquals("\u001b[57352;1:3u", KeyHandler.getKittyKeyCode(
-            KeyEvent.KEYCODE_DPAD_UP, 0, flags, 0, 3));
+        assertEquals("\u001b[98;5:2u", KeyHandler.getKittyKeyCode(
+            0, KeyHandler.KEYMOD_CTRL, flags, 'b', 2));
+        assertEquals("\u001b[98;5:3u", KeyHandler.getKittyKeyCode(
+            0, KeyHandler.KEYMOD_CTRL, flags, 'b', 3));
     }
 
     public void testPrintableWithoutModifierNeedsReportAll() {
@@ -218,6 +243,12 @@ public class KeyHandlerKittyTest extends TestCase {
     public void testGetKittyKeyCodeReturnsNullWhenDisambiguateOff() {
         assertNull(KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_DPAD_UP, 0,
             KeyHandler.KITTY_FLAG_NONE, 0));
+    }
+
+    public void testReportAllImpliesDisambiguation() {
+        // Report-all implies disambiguation (kitty spec), so flags without bit 1 still encode.
+        assertEquals("\u001b[97u", KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_UNKNOWN, 0,
+            KeyHandler.KITTY_FLAG_REPORT_ALL, 'a'));
     }
 
     public void testGetKittyKeyCodeReturnsNullForUnknownKeyWithoutReportAll() {
@@ -242,16 +273,81 @@ public class KeyHandlerKittyTest extends TestCase {
     }
 
     public void testGetKittyKeyCodeF1WithShift() {
-        String seq = KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_F1, KeyHandler.KEYMOD_SHIFT,
-            KeyHandler.KITTY_FLAG_DISAMBIGUATE, 0);
-        assertEquals("\u001b[57364;2u", seq);
+        assertNull(KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_F1, KeyHandler.KEYMOD_SHIFT,
+            KeyHandler.KITTY_FLAG_DISAMBIGUATE, 0));
     }
 
     public void testGetKittyKeyCodeF12WithAltCtrl() {
         int mods = KeyHandler.KEYMOD_ALT | KeyHandler.KEYMOD_CTRL;
-        String seq = KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_F12, mods,
-            KeyHandler.KITTY_FLAG_DISAMBIGUATE, 0);
-        assertEquals("\u001b[57375;7u", seq);
+        assertNull(KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_F12, mods,
+            KeyHandler.KITTY_FLAG_DISAMBIGUATE, 0));
+    }
+
+    // ========== Enter / Tab / Backspace / Space recovery exceptions ==========
+
+    public void testUnmodifiedEnterTabBackspaceKeepLegacyBytes() {
+        // Kitty spec: unmodified Enter/Tab/Backspace keep their legacy bytes unless
+        // report-all is set, so a crashed kitty-mode program can be recovered at a shell.
+        int flags = KeyHandler.KITTY_FLAG_DISAMBIGUATE | KeyHandler.KITTY_FLAG_REPORT_EVENT_TYPES;
+        assertNull(KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_ENTER, 0, flags, 0));
+        assertNull(KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_TAB, 0, flags, 0));
+        assertNull(KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_DEL, 0, flags, 0));
+        assertNull(KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_ENTER, 0, flags, 0, 3));
+    }
+
+    public void testUnmodifiedEnterTabBackspaceReportAll() {
+        int flags = KeyHandler.KITTY_FLAG_REPORT_ALL;
+        assertEquals("\u001b[13u", KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_ENTER, 0, flags, 0));
+        assertEquals("\u001b[9u", KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_TAB, 0, flags, 0));
+        assertEquals("\u001b[127u", KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_DEL, 0, flags, 0));
+    }
+
+    public void testShiftEnterUsesCsiU() {
+        // Shift+Enter has no legacy representation; apps such as pi rely on `CSI 13;2 u`.
+        int flags = KeyHandler.KITTY_FLAG_DISAMBIGUATE;
+        assertEquals("\u001b[13;2u", KeyHandler.getKittyKeyCode(
+            KeyEvent.KEYCODE_ENTER, KeyHandler.KEYMOD_SHIFT, flags, 0));
+        assertEquals("\u001b[13;2:3u", KeyHandler.getKittyKeyCode(
+            KeyEvent.KEYCODE_ENTER, KeyHandler.KEYMOD_SHIFT,
+            flags | KeyHandler.KITTY_FLAG_REPORT_EVENT_TYPES, 0, 3));
+    }
+
+    public void testUnmodifiedSpaceKeepsLegacyText() {
+        assertNull(KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_SPACE, 0,
+            KeyHandler.KITTY_FLAG_DISAMBIGUATE, 0));
+        assertEquals("\u001b[32;5u", KeyHandler.getKittyKeyCode(
+            KeyEvent.KEYCODE_SPACE, KeyHandler.KEYMOD_CTRL, KeyHandler.KITTY_FLAG_DISAMBIGUATE, 0));
+    }
+
+    public void testEscapeIsDisambiguatedToCsiU() {
+        int flags = KeyHandler.KITTY_FLAG_DISAMBIGUATE;
+        assertEquals("\u001b[27u", KeyHandler.getKittyKeyCode(
+            KeyEvent.KEYCODE_ESCAPE, 0, flags, 0));
+        assertEquals("\u001b[27;1:3u", KeyHandler.getKittyKeyCode(
+            KeyEvent.KEYCODE_ESCAPE, 0, flags | KeyHandler.KITTY_FLAG_REPORT_EVENT_TYPES, 0, 3));
+        assertEquals("\u001b[27;5u", KeyHandler.getKittyKeyCode(
+            KeyEvent.KEYCODE_ESCAPE, KeyHandler.KEYMOD_CTRL, flags, 0));
+    }
+
+    // ========== Keypad keys under disambiguation ==========
+
+    public void testNonTextKeypadKeysUseDedicatedCsiUCodes() {
+        int flags = KeyHandler.KITTY_FLAG_DISAMBIGUATE;
+        assertEquals("\u001b[57417u", KeyHandler.getKittyKeyCode(
+            KeyEvent.KEYCODE_NUMPAD_4, 0, flags, 0));
+        assertEquals("\u001b[57420;1:3u", KeyHandler.getKittyKeyCode(
+            KeyEvent.KEYCODE_NUMPAD_2, 0, flags | KeyHandler.KITTY_FLAG_REPORT_EVENT_TYPES, 0, 3));
+        assertEquals("\u001b[57414u", KeyHandler.getKittyKeyCode(
+            KeyEvent.KEYCODE_NUMPAD_ENTER, 0, flags, 0));
+        assertEquals("\u001b[57426u", KeyHandler.getKittyKeyCode(
+            KeyEvent.KEYCODE_NUMPAD_DOT, 0, flags, 0));
+    }
+
+    public void testNumLockDigitsRemainTextKeys() {
+        assertNull(KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_NUMPAD_4,
+            KeyHandler.KEYMOD_NUM_LOCK, KeyHandler.KITTY_FLAG_DISAMBIGUATE, 0));
+        assertNull(KeyHandler.getKittyKeyCode(KeyEvent.KEYCODE_NUMPAD_DOT,
+            KeyHandler.KEYMOD_NUM_LOCK, KeyHandler.KITTY_FLAG_DISAMBIGUATE, 0));
     }
 
     // ========== SysRq / Break ==========
