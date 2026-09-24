@@ -1,3 +1,15 @@
+## [2026-09-24] Build #82
+
+### Changes
+- 84dd281 Fix kitty mode to keep legacy functional keys in legacy form (#18)
+
+### Build Status
+- Prefix Validation: success
+- APK Build: success
+- Emulator Tests: skipped
+
+---
+
 ## [2026-09-22] Build #78
 
 ### Changes
