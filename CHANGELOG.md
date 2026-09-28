@@ -1,3 +1,10 @@
+## [Unreleased]
+
+### Changes
+- Bundle OpenSSH for fresh offline installs and supervise a fixed shared ssh-agent socket across terminal and tmux sessions.
+
+---
+
 ## [2026-09-24] Build #82
 
 ### Changes

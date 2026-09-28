@@ -230,6 +230,14 @@ object TermuxConstants {
     @JvmField val TERMUX_VAR_PREFIX_DIR_PATH = "$TERMUX_PREFIX_DIR_PATH/var"
     @JvmField val TERMUX_VAR_PREFIX_DIR = File(TERMUX_VAR_PREFIX_DIR_PATH)
 
+    /** Private runtime directory for app-managed long-lived Unix sockets. */
+    @JvmField val TERMUX_RUN_PREFIX_DIR_PATH = "$TERMUX_VAR_PREFIX_DIR_PATH/run"
+    @JvmField val TERMUX_RUN_PREFIX_DIR = File(TERMUX_RUN_PREFIX_DIR_PATH)
+
+    /** Stable OpenSSH agent socket shared by all Termux terminal sessions. */
+    @JvmField val TERMUX_SSH_AGENT_SOCKET_PATH = "$TERMUX_RUN_PREFIX_DIR_PATH/ssh-agent.socket"
+    @JvmField val TERMUX_SSH_AGENT_SOCKET = File(TERMUX_SSH_AGENT_SOCKET_PATH)
+
     @JvmField val TERMUX_STAGING_PREFIX_DIR_PATH = "$TERMUX_FILES_DIR_PATH/usr-staging"
     @JvmField val TERMUX_STAGING_PREFIX_DIR = File(TERMUX_STAGING_PREFIX_DIR_PATH)
 

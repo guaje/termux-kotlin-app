@@ -16,6 +16,7 @@ import android.os.Looper
 import android.os.PowerManager
 import com.termux.R
 import com.termux.app.event.SystemEventReceiver
+import com.termux.app.ssh.TermuxSshAgent
 import com.termux.app.terminal.TermuxTerminalSessionActivityClient
 import com.termux.app.terminal.TermuxTerminalSessionServiceClient
 import com.termux.shared.android.PermissionUtils
@@ -113,6 +114,7 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
         }
         mShellManager = shellManager
 
+        ensureSshAgentRunning()
         runStartForeground()
         SystemEventReceiver.registerPackageUpdateEvents(this)
     }
@@ -159,6 +161,7 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
     override fun onDestroy() {
         Logger.logVerbose(LOG_TAG, "onDestroy")
 
+        TermuxSshAgent.stop()
         TermuxShellUtils.clearTermuxTMPDIR(true)
 
         actionReleaseWakeLock(false)
@@ -220,6 +223,7 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
     /** Process action to stop service. */
     private fun actionStopService() {
         mWantsToStop = true
+        TermuxSshAgent.stop()
         killAllTermuxExecutionCommands()
         requestStopService()
     }
@@ -450,6 +454,7 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
         }
 
         executionCommand.setShellCommandShellEnvironment = true
+        ensureSshAgentRunning()
 
         if (Logger.getLogLevel() >= Logger.LOG_LEVEL_VERBOSE) {
             Logger.logVerboseExtended(LOG_TAG, executionCommand.toString())
@@ -568,6 +573,7 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
 
         executionCommand.setShellCommandShellEnvironment = true
         executionCommand.terminalTranscriptRows = mProperties.getTerminalTranscriptRows()
+        ensureSshAgentRunning()
 
         if (Logger.getLogLevel() >= Logger.LOG_LEVEL_VERBOSE) {
             Logger.logVerboseExtended(LOG_TAG, executionCommand.toString())
@@ -604,6 +610,12 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
         TermuxActivity.updateTermuxActivityStyling(this, false)
 
         return newTermuxSession
+    }
+
+    private fun ensureSshAgentRunning() {
+        if (!mWantsToStop) {
+            TermuxSshAgent.ensureRunningAsync(!mProperties.isSshAgentDisabled())
+        }
     }
 
     /** Remove a TermuxSession. */

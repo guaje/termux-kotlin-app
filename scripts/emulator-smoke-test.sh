@@ -19,8 +19,24 @@ APK_PATH="${APK_PATH:-app/build/outputs/apk/debug/app-debug.apk}"
 PACKAGE_NAME="${PACKAGE_NAME:-com.termux}"
 MAIN_ACTIVITY="${MAIN_ACTIVITY:-com.termux.app.TermuxActivity}"
 TEST_TIMEOUT="${TEST_TIMEOUT:-300}"
-BOOTSTRAP_TIMEOUT="${BOOTSTRAP_TIMEOUT:-180}"
+# Bootstrap extraction is followed by offline dpkg installation of the bundled
+# OpenSSH closure, so allow the app extra time before the tests start.
+BOOTSTRAP_TIMEOUT="${BOOTSTRAP_TIMEOUT:-300}"
 LOG_DIR="${LOG_DIR:-${TMPDIR:-/tmp}/emulator-test-logs}"
+
+# Paths inside the disposable emulator app data directory. Everything below is
+# derived from PACKAGE_NAME so the tests never touch a real device installation.
+PREFIX="${PREFIX:-/data/data/${PACKAGE_NAME}/files/usr}"
+SSH_AGENT_SOCKET="${SSH_AGENT_SOCKET:-$PREFIX/var/run/ssh-agent.socket}"
+SSH_AGENT_MARKER="${SSH_AGENT_MARKER:-$PREFIX/var/lib/termux-kotlin/ssh-agent-packages-v1}"
+TERMUX_ENV_FILE="${TERMUX_ENV_FILE:-$PREFIX/etc/termux/termux.env}"
+SSH_TEST_KEY="${SSH_TEST_KEY:-$PREFIX/tmp/emulator-smoke-ed25519}"
+SSH_TEST_LIST="${SSH_TEST_LIST:-$PREFIX/tmp/emulator-smoke-ssh-add-l.txt}"
+SSH_TEST_KEY_COMMENT="termux-smoke-test-key"
+# TermuxInstaller bounds the bundled OpenSSH dpkg transaction with a 120 second
+# process timeout, so every wait for that transaction must cover at least the
+# same budget: 60 attempts x 2 seconds.
+SSH_AGENT_WAIT_ATTEMPTS="${SSH_AGENT_WAIT_ATTEMPTS:-60}"
 
 # Test results
 TESTS_PASSED=0
@@ -55,6 +71,8 @@ init_test_env() {
     log_info "Initializing test environment..."
     log_info "APK Path: $APK_PATH"
     log_info "Package: $PACKAGE_NAME"
+    log_info "Prefix: $PREFIX"
+    log_info "ssh-agent socket: $SSH_AGENT_SOCKET"
     log_info "Log directory: $LOG_DIR"
 }
 
@@ -174,36 +192,41 @@ launch_app() {
     fi
 }
 
-# Wait for bootstrap extraction to complete
+# Wait for the app to finish bootstrapping.
+#
+# Bootstrapping is not finished when the bootstrap archive has been extracted:
+# TermuxInstaller then runs an offline dpkg transaction for the bundled OpenSSH
+# closure and only records its marker afterwards. Readiness is therefore that
+# marker, not $PREFIX/bin/bash, because Tests 5 and 6 run "pkg" (dpkg) and must
+# never overlap the app's own dpkg transaction. The wait stays bounded by
+# BOOTSTRAP_TIMEOUT and a timeout is not fatal here; the individual tests and the
+# collected artifacts report what is actually missing.
 wait_for_bootstrap() {
-    log_info "Waiting for bootstrap extraction..."
+    log_info "Waiting for bootstrap extraction and bundled OpenSSH installation..."
     
     local wait_time=0
     local max_wait=$BOOTSTRAP_TIMEOUT
-    local bootstrap_marker="/data/data/${PACKAGE_NAME}/files/usr/bin/bash"
     
     while [ $wait_time -lt $max_wait ]; do
-        # Check if bootstrap extraction is complete
-        if adb shell "run-as $PACKAGE_NAME test -f $bootstrap_marker" 2>/dev/null; then
-            log_info "Bootstrap extraction completed"
-            return 0
-        fi
-        
-        # Alternative check via shell existence
-        if adb shell "test -d /data/data/${PACKAGE_NAME}/files/usr" 2>/dev/null; then
-            if adb shell "ls /data/data/${PACKAGE_NAME}/files/usr/bin/bash" 2>/dev/null | grep -q bash; then
-                log_info "Bootstrap extraction completed (verified via ls)"
+        # Do not rely on adb propagating the nested run-as exit code. The marker
+        # printed by the device shell is the readiness signal, just as it is for
+        # the test helpers below.
+        local result
+        result=$(adb shell "run-as $PACKAGE_NAME sh -c 'test -f $SSH_AGENT_MARKER && echo BOOTSTRAP_READY'" 2>&1) || true
+        case "$result" in
+            *BOOTSTRAP_READY*)
+                log_info "Bootstrap and bundled OpenSSH packages are ready"
                 return 0
-            fi
-        fi
-        
+                ;;
+        esac
+
         sleep 5
         wait_time=$((wait_time + 5))
         log_info "Waiting for bootstrap... ($wait_time/$max_wait seconds)"
     done
     
-    log_warn "Bootstrap may not be fully extracted after ${max_wait}s"
-    log_warn "Continuing with tests anyway..."
+    log_warn "Bootstrap or bundled OpenSSH install did not finish after ${max_wait}s"
+    log_warn "Continuing with tests anyway; the tests below and the artifacts report what is missing"
     return 0
 }
 
@@ -235,6 +258,81 @@ run_termux_command() {
         TESTS_FAILED=$((TESTS_FAILED + 1))
         return 1
     fi
+}
+
+# Run a Termux command and pass only when the device-side command printed the
+# expected marker. The exit code of a nested run-as shell is not reliably
+# propagated through adb, so the marker written by the command itself is the
+# source of truth. The command must not contain single quotes.
+run_termux_check() {
+    local cmd="$1"
+    local description="$2"
+    local marker="$3"
+
+    log_test "Running: $description"
+    log_info "Command: $cmd"
+
+    local result
+    result=$(adb shell "run-as $PACKAGE_NAME $PREFIX/bin/bash -c '$cmd'" 2>&1) || true
+
+    echo "$result" >> "$TEST_LOG"
+
+    case "$result" in
+        *"$marker"*)
+            log_info "$description passed"
+            echo "$result" | head -20
+            TESTS_PASSED=$((TESTS_PASSED + 1))
+            return 0
+            ;;
+    esac
+
+    log_error "$description failed (marker $marker missing)"
+    echo "$result"
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+    return 1
+}
+
+# Verify the app-managed ssh-agent shipped as verified APK assets.
+#
+# Every command runs inside the disposable emulator app data directory with an
+# explicit SSH_AUTH_SOCK. Nothing here force-stops the app, writes user shell
+# configuration or removes a socket, so a failure can never leave the app in a
+# state that the following tests would misreport.
+test_ssh_agent() {
+    log_info "Starting ssh-agent tests..."
+
+    # Test 11: OpenSSH binaries are present once the dpkg migration finished.
+    run_termux_check "if [ -x $PREFIX/bin/ssh-agent ] && [ -x $PREFIX/bin/ssh-add ]; then echo TOOLS_OK; fi" \
+        "ssh-agent and ssh-add installed" "TOOLS_OK" || true
+
+    # Test 12: fresh app data must have used the bundled offline package closure.
+    run_termux_check "if [ -f $SSH_AGENT_MARKER ] && [ \"\$(cat $SSH_AGENT_MARKER)\" = bundled-openssh ]; then echo MARKER_OK; else echo \"MARKER=\$(cat $SSH_AGENT_MARKER 2>/dev/null)\"; fi" \
+        "Bundled OpenSSH package marker" "MARKER_OK" || true
+
+    # Test 13: normal sessions receive the fixed socket path via termux.env.
+    run_termux_check "if grep SSH_AUTH_SOCK $TERMUX_ENV_FILE 2>/dev/null | grep -q $SSH_AGENT_SOCKET; then echo ENV_OK; else grep SSH_AUTH_SOCK $TERMUX_ENV_FILE 2>/dev/null; fi" \
+        "SSH_AUTH_SOCK exported in termux.env" "ENV_OK" || true
+
+    # Test 14: agent startup follows the completed dpkg transaction. Poll until
+    # the fixed socket and its private 0700 parent are both ready.
+    if ! run_termux_check "i=0; while [ \$i -lt $SSH_AGENT_WAIT_ATTEMPTS ]; do if [ -S $SSH_AGENT_SOCKET ]; then d=\$(dirname $SSH_AGENT_SOCKET); m=\$(stat -c %a \$d 2>/dev/null); if [ \"\$m\" = 700 ]; then echo SOCKET_OK; break; fi; fi; i=\$((i + 1)); sleep 2; done" \
+        "Fixed ssh-agent socket with 0700 run directory" "SOCKET_OK"; then
+        log_warn "Skipping ssh-agent probe and key tests because the fixed socket is not ready"
+        return 0
+    fi
+
+    # Test 15: the agent answers on the fixed socket. ssh-add exits 1 when it has
+    # no identities and 2 when it cannot reach an agent, so 2 must fail the test.
+    run_termux_check "SSH_AUTH_SOCK=$SSH_AGENT_SOCKET $PREFIX/bin/ssh-add -l; rc=\$?; echo \"ssh-add -l exit=\$rc\"; if [ \$rc -eq 0 ] || [ \$rc -eq 1 ]; then echo AGENT_LIVE; fi" \
+        "ssh-add -l on fixed socket exits 0 or 1" "AGENT_LIVE" || true
+
+    # Test 16: a throwaway key can be added to the app-managed agent.
+    run_termux_check "rm -f $SSH_TEST_KEY $SSH_TEST_KEY.pub; $PREFIX/bin/ssh-keygen -t ed25519 -N \"\" -C $SSH_TEST_KEY_COMMENT -f $SSH_TEST_KEY >/dev/null 2>&1; if [ -f $SSH_TEST_KEY ]; then SSH_AUTH_SOCK=$SSH_AGENT_SOCKET $PREFIX/bin/ssh-add $SSH_TEST_KEY >/dev/null 2>&1 && echo KEY_ADDED; fi" \
+        "Throwaway ed25519 key added with ssh-add" "KEY_ADDED" || true
+
+    # Test 17: a separate process still sees the key, then the key is wiped.
+    run_termux_check "SSH_AUTH_SOCK=$SSH_AGENT_SOCKET $PREFIX/bin/ssh-add -l > $SSH_TEST_LIST 2>&1; rc=\$?; echo \"second process ssh-add -l exit=\$rc\"; cat $SSH_TEST_LIST; if [ \$rc -eq 0 ] && grep -q $SSH_TEST_KEY_COMMENT $SSH_TEST_LIST; then found=1; else found=0; fi; SSH_AUTH_SOCK=$SSH_AGENT_SOCKET $PREFIX/bin/ssh-add -D >/dev/null 2>&1; rm -f $SSH_TEST_KEY $SSH_TEST_KEY.pub $SSH_TEST_LIST; if [ \$found -eq 1 ]; then echo KEY_LISTED; fi" \
+        "Loaded key visible from a second process" "KEY_LISTED" || true
 }
 
 # Run a command via am broadcast (alternative method)
@@ -271,6 +369,10 @@ collect_artifacts() {
     # Collect package info
     adb shell dumpsys package "$PACKAGE_NAME" > "$LOG_DIR/package-info.txt" 2>/dev/null || true
     
+    # Collect ssh-agent state for the agent tests
+    adb shell "run-as $PACKAGE_NAME ls -la $PREFIX/var/run" > "$LOG_DIR/ssh-agent-socket.txt" 2>/dev/null || true
+    adb shell "run-as $PACKAGE_NAME cat $TERMUX_ENV_FILE" > "$LOG_DIR/termux-env.txt" 2>/dev/null || true
+
     log_info "Artifacts collected in: $LOG_DIR"
 }
 
@@ -306,9 +408,11 @@ run_smoke_tests() {
     log_test "Test 7: termux-info"
     run_termux_command 'termux-info 2>/dev/null || echo "termux-info not available"' "Termux info command" || true
     
-    # Test 8: Verify paths contain kotlin
+    # Test 8: The app writes the HOME value used by its terminal sessions.
+    # A bare adb run-as shell does not receive the app's managed environment.
     log_test "Test 8: Path verification"
-    run_termux_command 'echo $HOME | grep kotlin && echo "Path OK"' "Kotlin path verification" || true
+    run_termux_check "if grep -Fqx \"export HOME=\\\"${PREFIX%/usr}/home\\\"\" $TERMUX_ENV_FILE; then echo HOME_OK; fi" \
+        "termux.env exports the PREFIX-derived home directory" "HOME_OK" || true
     
     # Test 9: List installed packages
     log_test "Test 9: List packages"
@@ -317,6 +421,9 @@ run_smoke_tests() {
     # Test 10: Final echo
     log_test "Test 10: Final verification"
     run_termux_command 'echo "test"' "Final echo test" || true
+
+    # Tests 11-17: the built-in ssh-agent
+    test_ssh_agent
 }
 
 # Generate test report
@@ -360,6 +467,8 @@ EOF
 - \`screenshot.png\` - Final screen state
 - \`logcat.txt\` - Android system logs
 - \`termux-logs.txt\` - Termux application logs
+- \`ssh-agent-socket.txt\` - Listing of the fixed ssh-agent run directory
+- \`termux-env.txt\` - Generated \`termux.env\` sourced by sessions
 - \`test-results.log\` - Detailed test output
 
 ---
@@ -424,8 +533,18 @@ usage() {
     echo "Environment variables:"
     echo "  APK_PATH          Path to APK file"
     echo "  PACKAGE_NAME      Application package name"
+    echo "  BOOTSTRAP_TIMEOUT Bootstrap and bundled dpkg install wait in seconds"
     echo "  TEST_TIMEOUT      Overall test timeout"
     echo "  LOG_DIR           Log output directory"
+    echo ""
+    echo "Emulator path overrides (all default to PACKAGE_NAME derived paths):"
+    echo "  PREFIX                 Termux prefix inside the app data directory"
+    echo "  SSH_AGENT_SOCKET       Fixed ssh-agent socket path"
+    echo "  SSH_AGENT_MARKER       Installer marker for the bundled OpenSSH packages"
+    echo "  TERMUX_ENV_FILE        Generated environment file sourced by sessions"
+    echo "  SSH_TEST_KEY           Throwaway key used by the ssh-agent tests"
+    echo "  SSH_TEST_LIST          Temp output of ssh-add -l inside the prefix"
+    echo "  SSH_AGENT_WAIT_ATTEMPTS  Attempts to wait for the bundled OpenSSH install"
 }
 
 # Parse arguments
