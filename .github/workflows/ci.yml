@@ -64,8 +64,8 @@ jobs:
       - name: Run prefix validation
         id: validate
         run: |
-          echo "Validating that com.termux is replaced with com.termux.kotlin..."
           ./scripts/validate-prefix.sh --fast
+          ./scripts/validate-bundled-assets.sh
         continue-on-error: false
 
       - name: Collect failure logs
@@ -479,11 +479,14 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           disable-animations: true
           script: |
-            # Find APK
-            APK_PATH=$(find ./apks -name "*.apk" | head -1)
-            
+            # The AVD is x86_64; do not depend on artifact enumeration order.
+            APK_PATH=$(find ./apks -name "*x86_64.apk" -print -quit)
             if [ -z "$APK_PATH" ]; then
-              echo "No APK found!"
+              APK_PATH=$(find ./apks -name "*universal.apk" -print -quit)
+            fi
+
+            if [ -z "$APK_PATH" ]; then
+              echo "No x86_64 or universal APK found!"
               exit 1
             fi
             

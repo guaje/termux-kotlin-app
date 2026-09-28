@@ -34,6 +34,9 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStreamReader
 import java.security.MessageDigest
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.ZipInputStream
 
 /**
@@ -52,6 +55,10 @@ import java.util.zip.ZipInputStream
 object TermuxInstaller {
 
     private const val LOG_TAG = "TermuxInstaller"
+    private const val OPENSSH_INSTALL_TIMEOUT_MILLIS = 120_000L
+    private const val OUTPUT_THREAD_JOIN_TIMEOUT_MILLIS = 1_000L
+
+    private data class PrefixProcessResult(val exitCode: Int?, val output: String)
 
     /** Performs bootstrap setup if necessary. */
     @JvmStatic
@@ -111,6 +118,10 @@ object TermuxInstaller {
                         // --noprofile --norc, preventing ~/.profile and ~/.bashrc sourcing.
                         repairLoginScript()
                         installEssentialPackages(activity)
+                        installBundledSshPackages(activity)
+                        // Recreate the env file after the migration so upgraded installs get
+                        // SSH_AUTH_SOCK for the fixed agent socket without waiting for a reinstall.
+                        TermuxShellEnvironment.writeEnvironmentToFile(activity)
                     } catch (e: Exception) {
                         Logger.logStackTraceWithMessage(LOG_TAG, "Essential package migration failed", e)
                     } finally {
@@ -261,6 +272,7 @@ object TermuxInstaller {
                 // Install the verified Termux:API bridge and util-linux packages bundled
                 // with the APK. Failure is logged without making the terminal unusable.
                 installEssentialPackages(activity)
+                installBundledSshPackages(activity)
 
                 // Recreate env file since termux prefix was wiped earlier
                 TermuxShellEnvironment.writeEnvironmentToFile(activity)
@@ -528,6 +540,230 @@ object TermuxInstaller {
         } finally {
             temporaryDirectory.deleteRecursively()
         }
+    }
+
+    /**
+     * Install OpenSSH and its dependency closure from APK assets on first bootstrap.
+     *
+     * The standard upstream bootstrap excludes OpenSSH. Bundling the verified packages keeps a
+     * new installation offline-capable and avoids requiring users to install or configure an
+     * ssh-agent in their home directory. Existing user-installed OpenSSH is never downgraded.
+     */
+    private fun installBundledSshPackages(activity: Activity) {
+        val marker = File(TERMUX_PREFIX_DIR_PATH, "var/lib/termux-kotlin/ssh-agent-packages-v1")
+        if (marker.isFile) return
+
+        val sshAgent = File(TERMUX_BIN_PREFIX_DIR_PATH, "ssh-agent")
+        if (sshAgent.canExecute()) {
+            try {
+                marker.parentFile?.mkdirs()
+                marker.writeText("already-installed\n")
+            } catch (e: Exception) {
+                Logger.logWarn(LOG_TAG, "Failed to record existing OpenSSH installation: ${e.message}")
+            }
+            return
+        }
+
+        val architecture = when (Build.SUPPORTED_ABIS.firstOrNull()) {
+            "arm64-v8a" -> "aarch64"
+            "armeabi-v7a" -> "arm"
+            "x86_64" -> "x86_64"
+            "x86" -> "i686"
+            else -> {
+                Logger.logWarn(LOG_TAG, "Unsupported ABI for bundled OpenSSH packages: ${Build.SUPPORTED_ABIS.firstOrNull()}")
+                return
+            }
+        }
+        val packagePaths = try {
+            activity.assets.open("bootstrap-packages/ssh-agent-packages.txt")
+                .bufferedReader()
+                .useLines { lines ->
+                    lines.map(String::trim)
+                        .filter { it.isNotEmpty() && !it.startsWith("#") && it.startsWith("$architecture/") }
+                        .toList()
+                }
+        } catch (e: Exception) {
+            Logger.logStackTraceWithMessage(LOG_TAG, "Failed to read bundled OpenSSH package manifest", e)
+            return
+        }
+        if (packagePaths.isEmpty()) {
+            Logger.logWarn(LOG_TAG, "No bundled OpenSSH packages found for $architecture")
+            return
+        }
+
+        val checksums = try {
+            activity.assets.open("bootstrap-packages/sha256sums.txt")
+                .bufferedReader()
+                .useLines { lines ->
+                    lines.filter { it.isNotBlank() && !it.startsWith("#") }
+                        .associate { line ->
+                            val parts = line.trim().split(Regex("\\s+"), limit = 2)
+                            require(parts.size == 2) { "Malformed bootstrap package checksum entry" }
+                            parts[1] to parts[0].lowercase()
+                        }
+                }
+        } catch (e: Exception) {
+            Logger.logStackTraceWithMessage(LOG_TAG, "Failed to read bundled package checksums", e)
+            return
+        }
+        val dpkg = File(TERMUX_PREFIX_DIR_PATH, "bin/dpkg")
+        if (!dpkg.canExecute()) {
+            Logger.logWarn(LOG_TAG, "dpkg is unavailable; skipping bundled OpenSSH packages")
+            return
+        }
+
+        val temporaryDirectory = File(activity.cacheDir, "ssh-agent-packages-$architecture")
+        temporaryDirectory.deleteRecursively()
+        temporaryDirectory.mkdirs()
+        try {
+            val packageFiles = packagePaths.map { relativePath ->
+                val expected = checksums[relativePath]
+                    ?: throw IllegalStateException("Missing checksum for $relativePath")
+                val packageFile = File(temporaryDirectory, relativePath.substringAfter('/'))
+                activity.assets.open("bootstrap-packages/$relativePath").use { input ->
+                    packageFile.outputStream().use { output -> input.copyTo(output) }
+                }
+                val actual = packageFile.inputStream().use { input ->
+                    val digest = MessageDigest.getInstance("SHA-256")
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        digest.update(buffer, 0, count)
+                    }
+                    digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+                }
+                if (actual != expected) throw SecurityException("Checksum mismatch for $relativePath")
+                packageFile
+            }
+            val dpkgDeb = File(TERMUX_BIN_PREFIX_DIR_PATH, "dpkg-deb")
+            if (!dpkgDeb.canExecute()) throw IllegalStateException("dpkg-deb is unavailable")
+
+            // Do not replace a user-upgraded dependency with the version bundled in the APK.
+            // dpkg normally permits downgrades, so compare every package before the transaction
+            // and retain --no-force-downgrade below as a race-safe final guard.
+            val packagesToInstall = packageFiles.filter { packageFile ->
+                val packageName = getDebField(dpkgDeb, packageFile, "Package")
+                    ?: throw IllegalStateException("Unable to read package name from ${packageFile.name}")
+                val bundledVersion = getDebField(dpkgDeb, packageFile, "Version")
+                    ?: throw IllegalStateException("Unable to read package version from ${packageFile.name}")
+                val installedVersion = getInstalledPackageVersion(packageName)
+                if (installedVersion != null && isVersionAtLeast(dpkg, installedVersion, bundledVersion)) {
+                    Logger.logInfo(LOG_TAG, "Keeping installed $packageName $installedVersion instead of bundled $bundledVersion")
+                    false
+                } else {
+                    true
+                }
+            }
+
+            if (packagesToInstall.isNotEmpty()) {
+                val result = runPrefixCommand(
+                    listOf(dpkg.absolutePath, "--force-confold", "--no-force-downgrade", "-i") +
+                        packagesToInstall.map { it.absolutePath },
+                    OPENSSH_INSTALL_TIMEOUT_MILLIS
+                )
+                if (result.exitCode == null) {
+                    throw IllegalStateException("dpkg timed out while installing bundled OpenSSH packages")
+                }
+                if (result.exitCode != 0) {
+                    throw IllegalStateException("dpkg failed to install bundled OpenSSH packages (${result.exitCode}): ${result.output}")
+                }
+            }
+            if (!sshAgent.canExecute()) throw IllegalStateException("ssh-agent is unavailable after bundled package installation")
+
+            marker.parentFile?.mkdirs()
+            marker.writeText("bundled-openssh\n")
+            Logger.logInfo(LOG_TAG, "Installed bundled OpenSSH packages")
+        } catch (e: Exception) {
+            Logger.logStackTraceWithMessage(LOG_TAG, "Failed to install bundled OpenSSH packages", e)
+        } finally {
+            temporaryDirectory.deleteRecursively()
+        }
+    }
+
+    private fun getDebField(dpkgDeb: File, packageFile: File, field: String): String? {
+        val result = runPrefixCommand(
+            listOf(dpkgDeb.absolutePath, "-f", packageFile.absolutePath, field),
+            OPENSSH_INSTALL_TIMEOUT_MILLIS
+        )
+        return result.output.trim().takeIf { result.exitCode == 0 && it.isNotEmpty() }
+    }
+
+    /** Return the version of an installed package without starting a second dpkg process. */
+    private fun getInstalledPackageVersion(packageName: String): String? {
+        val statusFile = File(TERMUX_PREFIX_DIR_PATH, "var/lib/dpkg/status")
+        if (!statusFile.isFile) throw IllegalStateException("dpkg status file is unavailable")
+        return parseInstalledPackageVersion(statusFile.readText(), packageName)
+    }
+
+    /** Parse only installed/held package records; other dpkg states are not safe to replace. */
+    internal fun parseInstalledPackageVersion(statusText: String, packageName: String): String? {
+        val packageParagraph = statusText
+            .split("\n\n")
+            .firstOrNull { paragraph -> paragraph.lineSequence().any { it == "Package: $packageName" } }
+            ?: return null
+        val status = packageParagraph.lineSequence().firstOrNull { it.startsWith("Status: ") }
+        if (status != "Status: install ok installed" && status != "Status: hold ok installed") return null
+        return packageParagraph.lineSequence()
+            .firstOrNull { it.startsWith("Version: ") }
+            ?.removePrefix("Version: ")
+            ?.takeIf { it.isNotEmpty() }
+            ?: throw IllegalStateException("Installed package $packageName has no version")
+    }
+
+    private fun isVersionAtLeast(dpkg: File, installedVersion: String, bundledVersion: String): Boolean {
+        val result = runPrefixCommand(
+            listOf(dpkg.absolutePath, "--compare-versions", installedVersion, "ge", bundledVersion),
+            OPENSSH_INSTALL_TIMEOUT_MILLIS
+        )
+        return when (result.exitCode) {
+            0 -> true
+            1 -> false
+            else -> throw IllegalStateException(
+                "Unable to compare installed $installedVersion with bundled $bundledVersion: ${result.output}"
+            )
+        }
+    }
+
+    private fun runPrefixCommand(arguments: List<String>, timeoutMillis: Long): PrefixProcessResult {
+        val process = ProcessBuilder(arguments)
+            .directory(TERMUX_PREFIX_DIR)
+            .redirectErrorStream(true)
+            .apply {
+                environment()["HOME"] = TermuxConstants.TERMUX_HOME_DIR_PATH
+                environment()["PREFIX"] = TERMUX_PREFIX_DIR_PATH
+                environment()["PATH"] = "$TERMUX_PREFIX_DIR_PATH/bin"
+                environment()["LD_LIBRARY_PATH"] = "$TERMUX_PREFIX_DIR_PATH/lib"
+                environment()["TMPDIR"] = "$TERMUX_PREFIX_DIR_PATH/tmp"
+                environment()["DEBIAN_FRONTEND"] = "noninteractive"
+            }
+            .start()
+        val output = StringBuilder()
+        val outputThread = Thread {
+            process.inputStream.bufferedReader().use { output.append(it.readText()) }
+        }.apply { start() }
+        process.outputStream.close()
+        val exitCode = waitForProcess(process, timeoutMillis)
+        if (exitCode == null) process.destroy()
+        outputThread.join(OUTPUT_THREAD_JOIN_TIMEOUT_MILLIS)
+        return PrefixProcessResult(exitCode, output.toString())
+    }
+
+    private fun waitForProcess(process: Process, timeoutMillis: Long): Int? {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            return if (process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS)) process.exitValue() else null
+        }
+
+        val result = AtomicReference<Int?>()
+        val completed = CountDownLatch(1)
+        Thread {
+            try {
+                result.set(process.waitFor())
+            } finally {
+                completed.countDown()
+            }
+        }.apply { start() }
+        return if (completed.await(timeoutMillis, TimeUnit.MILLISECONDS)) result.get() else null
     }
     
     /**

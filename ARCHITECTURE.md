@@ -268,8 +268,9 @@ The LD_PRELOAD shim is auto-compiled when clang is installed and loaded automati
 |----------|-------|---------|
 | `SSL_CERT_FILE` | `$PREFIX/etc/tls/cert.pem` | CA certificate bundle for curl/wget |
 | `CURL_CA_BUNDLE` | `$PREFIX/etc/tls/cert.pem` | curl-specific CA bundle path |
+| `SSH_AUTH_SOCK` | `$PREFIX/var/run/ssh-agent.socket` | Shared agent socket while the Termux foreground service runs |
 
-These SSL variables enable HTTPS connections to package mirrors and other secure endpoints.
+These SSL variables enable HTTPS connections to package mirrors and other secure endpoints. The SSH agent is started empty and its loaded keys remain only in memory until the Termux service stops, the app is killed, or the device reboots; see [SSH agent](docs/SSH_AGENT.md).
 
 ## 📚 Resources
 

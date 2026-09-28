@@ -112,6 +112,9 @@ object TermuxPropertyConstants {
     /** Defines the key for whether the [com.termux.shared.termux.shell.am.TermuxAmSocketServer] should be run at app startup */
     const val KEY_RUN_TERMUX_AM_SOCKET_SERVER = "run-termux-am-socket-server"
 
+    /** Defines the key for whether the built-in OpenSSH agent should be disabled. */
+    const val KEY_DISABLE_SSH_AGENT = "disable-ssh-agent"
+
     /** Defines the key for whether url links in terminal transcript will automatically open on click or on tap */
     const val KEY_TERMINAL_ONCLICK_URL_OPEN = "terminal-onclick-url-open"
 
@@ -341,6 +344,7 @@ object TermuxPropertyConstants {
         KEY_EXTRA_KEYS_TEXT_ALL_CAPS,
         KEY_HIDE_SOFT_KEYBOARD_ON_STARTUP,
         KEY_RUN_TERMUX_AM_SOCKET_SERVER,
+        KEY_DISABLE_SSH_AGENT,
         KEY_TERMINAL_ONCLICK_URL_OPEN,
         KEY_USE_CTRL_SPACE_WORKAROUND,
         KEY_USE_FULLSCREEN,
@@ -389,6 +393,7 @@ object TermuxPropertyConstants {
         KEY_DISABLE_TERMINAL_SESSION_CHANGE_TOAST,
         KEY_ENFORCE_CHAR_BASED_INPUT,
         KEY_HIDE_SOFT_KEYBOARD_ON_STARTUP,
+        KEY_DISABLE_SSH_AGENT,
         KEY_TERMINAL_ONCLICK_URL_OPEN,
         KEY_USE_CTRL_SPACE_WORKAROUND,
         KEY_USE_FULLSCREEN,

@@ -48,3 +48,5 @@ signing.properties
 # Binary packages
 *.deb
 repo/**/*.deb
+# Verified bootstrap packages are application assets and must be version controlled.
+!app/src/main/assets/bootstrap-packages/**/*.deb
