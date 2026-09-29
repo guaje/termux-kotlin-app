@@ -19,6 +19,44 @@ separate_receiver="com.termux.api/.TermuxApiReceiver"
   sha256sum --check --quiet sha256sums.txt
 )
 
+ssh_agent_manifest="$packages_dir/ssh-agent-packages.txt"
+if [[ ! -f "$ssh_agent_manifest" ]]; then
+  echo 'Missing bundled ssh-agent package manifest.' >&2
+  exit 1
+fi
+
+expected_ssh_agent_packages=(
+  krb5
+  ldns
+  libdb
+  libedit
+  libresolv-wrapper
+  openssh
+  openssh-sftp-server
+  termux-auth
+)
+for arch in aarch64 arm x86_64 i686; do
+  mapfile -t ssh_agent_packages < <(grep -E "^${arch}/[^/]+\\.deb$" "$ssh_agent_manifest")
+  if [[ ${#ssh_agent_packages[@]} -ne ${#expected_ssh_agent_packages[@]} ]]; then
+    echo "Expected ${#expected_ssh_agent_packages[@]} bundled OpenSSH packages for $arch." >&2
+    exit 1
+  fi
+
+  actual_packages=()
+  for relative_path in "${ssh_agent_packages[@]}"; do
+    package_file="$packages_dir/$relative_path"
+    if [[ ! -f "$package_file" ]]; then
+      echo "Missing bundled OpenSSH package: $relative_path" >&2
+      exit 1
+    fi
+    actual_packages+=("$(dpkg-deb --ctrl-tarfile "$package_file" | tar -xOf - ./control | sed -n 's/^Package: //p')")
+  done
+  if [[ "$(printf '%s\n' "${actual_packages[@]}" | sort)" != "$(printf '%s\n' "${expected_ssh_agent_packages[@]}" | sort)" ]]; then
+    echo "Bundled OpenSSH package set for $arch is incomplete or unexpected." >&2
+    exit 1
+  fi
+done
+
 temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/termux-kotlin-assets.XXXXXX")
 trap 'rm -rf "$temp_dir"' EXIT
 

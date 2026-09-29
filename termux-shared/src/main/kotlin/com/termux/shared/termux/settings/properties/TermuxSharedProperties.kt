@@ -186,6 +186,10 @@ abstract class TermuxSharedProperties(
         return getInternalPropertyValue(TermuxPropertyConstants.KEY_RUN_TERMUX_AM_SOCKET_SERVER, true) as Boolean
     }
 
+    fun isSshAgentDisabled(): Boolean {
+        return getInternalPropertyValue(TermuxPropertyConstants.KEY_DISABLE_SSH_AGENT, true) as Boolean
+    }
+
     fun shouldOpenTerminalTranscriptURLOnClick(): Boolean {
         return getInternalPropertyValue(TermuxPropertyConstants.KEY_TERMINAL_ONCLICK_URL_OPEN, true) as Boolean
     }

@@ -8,7 +8,9 @@ import com.termux.shared.shell.command.environment.AndroidShellEnvironment
 import com.termux.shared.shell.command.environment.ShellEnvironmentUtils
 import com.termux.shared.termux.TermuxBootstrap
 import com.termux.shared.termux.TermuxConstants
+import com.termux.shared.termux.settings.properties.TermuxAppSharedProperties
 import com.termux.shared.termux.shell.TermuxShellUtils
+import java.io.File
 import java.nio.charset.Charset
 
 /**
@@ -67,6 +69,17 @@ open class TermuxShellEnvironment : AndroidShellEnvironment() {
             val caCertPath = "${TermuxConstants.TERMUX_PREFIX_DIR_PATH}/etc/tls/cert.pem"
             environment[ENV_SSL_CERT_FILE] = caCertPath
             environment[ENV_CURL_CA_BUNDLE] = caCertPath
+
+            // All Termux sessions use a single fixed agent socket. This is deliberately
+            // independent of a shell-started agent so tmux panes keep a valid path when
+            // the app restarts the agent after a stale socket is recovered.
+            if (shouldExportSshAuthSock(
+                    TermuxAppSharedProperties.getProperties()?.isSshAgentDisabled() == true,
+                    File(TermuxConstants.TERMUX_BIN_PREFIX_DIR, "ssh-agent").canExecute()
+                )
+            ) {
+                environment[ENV_SSH_AUTH_SOCK] = TermuxConstants.TERMUX_SSH_AGENT_SOCKET_PATH
+            }
         }
 
         return environment
@@ -104,6 +117,15 @@ open class TermuxShellEnvironment : AndroidShellEnvironment() {
         
         /** Environment variable for curl CA bundle path. */
         const val ENV_CURL_CA_BUNDLE = "CURL_CA_BUNDLE"
+
+        /** Environment variable for the OpenSSH authentication agent socket. */
+        const val ENV_SSH_AUTH_SOCK = "SSH_AUTH_SOCK"
+
+        /** Whether a normal session should receive the fixed app-managed agent socket. */
+        @JvmStatic
+        fun shouldExportSshAuthSock(isSshAgentDisabled: Boolean, isSshAgentAvailable: Boolean): Boolean {
+            return !isSshAgentDisabled && isSshAgentAvailable
+        }
 
         /** Init [TermuxShellEnvironment] constants and caches. */
         @JvmStatic
