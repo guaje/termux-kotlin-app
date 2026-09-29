@@ -32,6 +32,7 @@ import java.io.BufferedReader
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.io.InputStreamReader
 import java.security.MessageDigest
 import java.util.concurrent.CountDownLatch
@@ -740,7 +741,13 @@ object TermuxInstaller {
             .start()
         val output = StringBuilder()
         val outputThread = Thread {
-            process.inputStream.bufferedReader().use { output.append(it.readText()) }
+            // A timeout destroys the process, which closes this descriptor under the blocked read.
+            // An escaping exception here would crash the app in the middle of a package install.
+            try {
+                process.inputStream.bufferedReader().use { output.append(it.readText()) }
+            } catch (e: IOException) {
+                Logger.logVerbose(LOG_TAG, "Process output stream closed: ${e.message}")
+            }
         }.apply { start() }
         process.outputStream.close()
         val exitCode = waitForProcess(process, timeoutMillis)
