@@ -44,7 +44,7 @@ the `Emulator Tests` CI job after the APK is installed and the app has bootstrap
 | Check | Assertion |
 |-------|-----------|
 | Binaries | `$PREFIX/bin/ssh-agent` and `$PREFIX/bin/ssh-add` are executable once the offline dpkg migration finished |
-| Package marker | `$PREFIX/var/lib/termux-kotlin/ssh-agent-packages-v1` exists |
+| Package marker | `$PREFIX/var/lib/termux-kotlin/ssh-agent-packages-v1` contains `bundled-openssh`. An installation that already had OpenSSH records `already-installed` instead and keeps the user's packages, so this assertion only holds on fresh app data |
 | Socket | `$PREFIX/var/run/ssh-agent.socket` is a socket and its parent directory is mode `0700` |
 | Environment | `SSH_AUTH_SOCK` in `$PREFIX/etc/termux/termux.env` points at that exact socket |
 | Live probe | `ssh-add -l` with an explicit socket exits `0` or `1`, never `2` |
@@ -83,6 +83,40 @@ socket path different from the fixed one asserted above. Isolation instead comes
 CI job runs on a throwaway emulator image, `pm clear` wipes the app data before launch and
 `adb uninstall` runs before each install. Never point this harness at a physical device that already
 holds a Termux installation.
+
+## Verifying an update install on a real device
+
+The harness above is destructive by design (`adb uninstall` before every install, `pm clear` before
+every launch) and must never run against a device that holds a real installation. An update that
+keeps user settings, sessions and packages is installed with the same signing config and the same or
+a higher `versionCode`, and without `-r`'s destructive companions:
+
+```sh
+# Release builds are signed with signing.properties; a debug-signed APK cannot update them.
+TERMUX_APP_VERSION_NAME=2.5.2 "$GRADLEW" :app:assembleRelease
+adb install -r app/build/outputs/apk/release/termux-app_apt-android-7-release_arm64-v8a.apk
+adb shell dumpsys package com.termux | grep -E 'firstInstallTime|lastUpdateTime'
+```
+
+`firstInstallTime` must be unchanged; that is the proof the data directory, and therefore `PREFIX`,
+survived. `installBundledSshPackages()` then runs on the existing prefix because its marker is new,
+and it leaves a user-installed OpenSSH that is at least the bundled version untouched.
+
+A release APK is not debuggable and the device is not rooted, so `run-as com.termux` is unavailable.
+Confirm the agent from outside the app with the process table instead, and run the assertions of
+tests 11-17 by typing them into a terminal session, which runs as the app UID:
+
+```sh
+adb shell am force-stop com.termux && adb shell am start -n com.termux/com.termux.app.TermuxActivity
+adb shell ps -A -o PID,PPID,NAME | grep ssh-agent
+adb shell cat /proc/<pid>/cmdline   # ssh-agent -D -a $PREFIX/var/run/ssh-agent.socket
+```
+
+With `SSH_AUTH_SOCK` exported by the session, `ssh-add -l` exits `1`, a throwaway `ssh-keygen`
+ed25519 key can be added and listed, and `$PREFIX/var/run` is `drwx------` holding a fresh
+`srw------- ssh-agent.socket`. `am force-stop` removes the agent and every loaded identity, and the
+next start recreates an empty agent on the same path. The opt-out is not exercised here because it
+needs a `~/.termux/termux.properties` edit, and stays in unit test coverage.
 
 ## Refreshing bundled packages
 
