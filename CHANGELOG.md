@@ -1,3 +1,15 @@
+## [2026-09-29] Build #91
+
+### Changes
+- 997413f Add persistent built-in SSH agent (#19)
+
+### Build Status
+- Prefix Validation: success
+- APK Build: success
+- Emulator Tests: skipped
+
+---
+
 ## [Unreleased]
 
 ### Changes
