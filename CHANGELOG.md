@@ -1,3 +1,15 @@
+## [2026-09-29] Build #93
+
+### Changes
+- cabff61 Stop ssh-agent teardown from crashing the app (#20)
+
+### Build Status
+- Prefix Validation: success
+- APK Build: success
+- Emulator Tests: skipped
+
+---
+
 ## [2026-09-29] Build #91
 
 ### Changes
