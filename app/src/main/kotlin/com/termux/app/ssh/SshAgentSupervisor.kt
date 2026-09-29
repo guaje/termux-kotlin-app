@@ -6,6 +6,8 @@ import com.termux.shared.file.filesystem.FileType
 import com.termux.shared.logger.Logger
 import com.termux.shared.termux.TermuxConstants
 import java.io.File
+import java.io.IOException
+import java.io.InputStream
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -78,6 +80,24 @@ object TermuxSshAgent {
     fun stop() {
         // Share the serial executor with startup so a queued start cannot outlive a stop request.
         executor.execute { supervisor.stop() }
+    }
+}
+
+/**
+ * Read [source] line by line until it reaches end of stream, reporting whether it ended cleanly.
+ *
+ * A [Process] reader thread must never let an I/O failure escape: stopping the agent calls
+ * `Process.destroy()`, which closes the descriptor underneath any blocked read, and an uncaught
+ * exception on that thread takes the whole app down with a crash report. Callers run this on a
+ * daemon thread purely to keep the child process from blocking on a full pipe.
+ */
+internal fun drainProcessOutput(source: InputStream, onLine: (String) -> Unit): Boolean {
+    return try {
+        source.bufferedReader().useLines { lines -> lines.forEach(onLine) }
+        true
+    } catch (e: IOException) {
+        // Expected teardown: the stream was closed while this thread was blocked reading it.
+        false
     }
 }
 
@@ -231,9 +251,10 @@ private class ProcessSshAgentRuntime : SshAgentRuntime {
 
     private fun drainOutput(process: Process) {
         Thread {
-            process.inputStream.bufferedReader().useLines { lines ->
-                lines.forEach { Logger.logDebug(LOG_TAG, "ssh-agent: $it") }
+            val endedCleanly = drainProcessOutput(process.inputStream) { line ->
+                Logger.logDebug(LOG_TAG, "ssh-agent: $line")
             }
+            if (!endedCleanly) Logger.logVerbose(LOG_TAG, "ssh-agent output stream closed during teardown")
         }.apply {
             isDaemon = true
             start()
