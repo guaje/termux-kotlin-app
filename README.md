@@ -125,8 +125,9 @@ The app automatically configures all necessary environment variables:
 | **Terminal** | `TERMINFO`, `TERM`, `COLORTERM` | Full terminal capability support |
 | **Package Manager** | `DPKG_ADMINDIR`, `DPKG_DATADIR` | dpkg/apt path overrides |
 | **SSL/TLS** | `SSL_CERT_FILE`, `CURL_CA_BUNDLE` | HTTPS mirror support |
+| **SSH agent** | `SSH_AUTH_SOCK` | Shared agent socket while the Termux foreground service runs; keys stay only in RAM |
 
-See [ARCHITECTURE.md](ARCHITECTURE.md#-environment-variables) for the complete list.
+See [ARCHITECTURE.md](ARCHITECTURE.md#-environment-variables) and [SSH agent](docs/SSH_AGENT.md) for the complete list and lifecycle details.
 
 ### 🎯 Why Kotlin?
 
