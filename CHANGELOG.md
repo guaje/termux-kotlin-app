@@ -3,6 +3,9 @@
 ### Changes
 - Bundle OpenSSH for fresh offline installs and supervise a fixed shared ssh-agent socket across terminal and tmux sessions.
 
+### Fixes
+- Stopping the built-in ssh-agent no longer crashes the app with an interrupted read on its output thread.
+
 ---
 
 ## [2026-09-24] Build #82
