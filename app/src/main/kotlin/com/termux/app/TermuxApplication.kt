@@ -72,6 +72,10 @@ class TermuxApplication : Application() {
             
             // Start the autonomous agent service in the background
             startAgentService(context)
+
+            // Keep the app-managed bundled packages correct even when this process did not create
+            // the first terminal session, which is the only other place migrations run.
+            TermuxInstaller.verifyBundledPackagesIntegrityAsync(context)
         }
     }
     

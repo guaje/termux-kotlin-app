@@ -37,6 +37,7 @@ import java.io.InputStreamReader
 import java.security.MessageDigest
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.ZipInputStream
 
@@ -58,6 +59,101 @@ object TermuxInstaller {
     private const val LOG_TAG = "TermuxInstaller"
     private const val OPENSSH_INSTALL_TIMEOUT_MILLIS = 120_000L
     private const val OUTPUT_THREAD_JOIN_TIMEOUT_MILLIS = 1_000L
+
+    /** Package whose CLI helper must address the API built into this APK. */
+    private const val BUNDLED_API_PACKAGE_NAME = "termux-api"
+
+    /** Receiver implemented by this app, targeted by the bundled helper binary. */
+    private const val INTEGRATED_API_RECEIVER = "com.termux/.api.TermuxApiReceiver"
+
+    /** Receiver of the standalone Termux:API app, which this project does not ship. */
+    private const val UPSTREAM_API_RECEIVER = "com.termux.api/.TermuxApiReceiver"
+
+    private const val BUNDLED_API_HELPER_RELATIVE_PATH = "libexec/termux-api-broadcast"
+
+    /** Guards against an application start and an activity start repairing concurrently. */
+    private val packageIntegrityCheckRunning = AtomicBoolean(false)
+
+    /** What to do about the installed Termux:API CLI package. */
+    internal enum class BundledApiPackageAction {
+        /** Installed helper is the app-integrated one: nothing to do. */
+        NONE,
+
+        /** Missing or replaced by the standalone-app build: install the verified asset. */
+        INSTALL_BUNDLED,
+
+        /** Helper is wrong but the installed version is not older than ours: never downgrade. */
+        WARN_ONLY
+    }
+
+    /**
+     * Decide whether the installed Termux:API CLI package has to be repaired.
+     *
+     * Version equality alone is not enough: an index can offer a package with the expected
+     * version whose helper still broadcasts to the standalone Termux:API app, which this project
+     * does not ship, so every `termux-*` command would silently stop working.
+     */
+    internal fun decideBundledApiPackageAction(
+        isPackageInstalled: Boolean,
+        doesInstalledHelperTargetIntegratedApi: Boolean,
+        isInstalledVersionAtLeastBundled: Boolean
+    ): BundledApiPackageAction {
+        if (isPackageInstalled && doesInstalledHelperTargetIntegratedApi) {
+            return BundledApiPackageAction.NONE
+        }
+        if (isPackageInstalled && isInstalledVersionAtLeastBundled) {
+            return BundledApiPackageAction.WARN_ONLY
+        }
+        return BundledApiPackageAction.INSTALL_BUNDLED
+    }
+
+    /**
+     * Whether the byte-for-byte contents of the installed helper target this app's receiver and
+     * not the standalone Termux:API one. Pass the file decoded as ISO-8859-1, which maps every
+     * byte to one character and therefore cannot hide a literal behind a decoding error.
+     */
+    internal fun doesHelperTargetIntegratedApi(helperContents: String): Boolean {
+        return helperContents.contains(INTEGRATED_API_RECEIVER) &&
+            !helperContents.contains(UPSTREAM_API_RECEIVER)
+    }
+
+    /**
+     * Whether the bundled OpenSSH closure has to be installed.
+     *
+     * The marker records that a migration once succeeded, which is not the same as the binaries
+     * still being present: `pkg remove openssh` used to leave the agent permanently unavailable
+     * because the marker kept short-circuiting the installer.
+     */
+    internal fun shouldInstallBundledSshPackages(
+        isMarkerPresent: Boolean,
+        isSshAgentAvailable: Boolean
+    ): Boolean {
+        return !isMarkerPresent || !isSshAgentAvailable
+    }
+
+    /** Return the `Status:` line of an installed package record, or null when it is absent. */
+    internal fun parseInstalledPackageStatus(statusText: String, packageName: String): String? {
+        return statusText
+            .split("\n\n")
+            .firstOrNull { paragraph -> paragraph.lineSequence().any { it == "Package: $packageName" } }
+            ?.lineSequence()
+            ?.firstOrNull { it.startsWith("Status: ") }
+    }
+
+    /**
+     * Extract the package version encoded in a bundled asset file name, for example
+     * `termux-api_1%3a0.59.1-1_aarch64.deb` to `1:0.59.1-1`. The asset validator pins the control
+     * `Version:` field to this exact value, so the name and the package metadata cannot drift.
+     */
+    internal fun parseBundledPackageVersionFromFileName(fileName: String, architecture: String): String? {
+        val prefix = "${BUNDLED_API_PACKAGE_NAME}_"
+        val suffix = "_$architecture.deb"
+        if (!fileName.startsWith(prefix) || !fileName.endsWith(suffix)) return null
+        return fileName.removePrefix(prefix).removeSuffix(suffix)
+            .replace("%3a", ":")
+            .replace("%3A", ":")
+            .takeIf { it.isNotEmpty() }
+    }
 
     private data class PrefixProcessResult(val exitCode: Int?, val output: String)
 
@@ -120,6 +216,9 @@ object TermuxInstaller {
                         repairLoginScript()
                         installEssentialPackages(activity)
                         installBundledSshPackages(activity)
+                        // Markers record that a migration once succeeded, not that the packages are
+                        // still intact, so every start also verifies the integrated API package.
+                        checkBundledPackagesIntegrityIfIdle(activity)
                         // Recreate the env file after the migration so upgraded installs get
                         // SSH_AUTH_SOCK for the fixed agent socket without waiting for a reinstall.
                         TermuxShellEnvironment.writeEnvironmentToFile(activity)
@@ -552,10 +651,12 @@ object TermuxInstaller {
      */
     private fun installBundledSshPackages(activity: Activity) {
         val marker = File(TERMUX_PREFIX_DIR_PATH, "var/lib/termux-kotlin/ssh-agent-packages-v1")
-        if (marker.isFile) return
-
         val sshAgent = File(TERMUX_BIN_PREFIX_DIR_PATH, "ssh-agent")
+
+        if (!shouldInstallBundledSshPackages(marker.isFile, sshAgent.canExecute())) return
+
         if (sshAgent.canExecute()) {
+            // The binaries are present but unrecorded, for example a package installed with pkg.
             try {
                 marker.parentFile?.mkdirs()
                 marker.writeText("already-installed\n")
@@ -679,6 +780,202 @@ object TermuxInstaller {
             Logger.logStackTraceWithMessage(LOG_TAG, "Failed to install bundled OpenSSH packages", e)
         } finally {
             temporaryDirectory.deleteRecursively()
+        }
+    }
+
+    /**
+     * Verify the app-managed bundled packages from anywhere in the app, off the calling thread.
+     *
+     * [setupBootstrapIfNeeded] only runs before the first terminal session of an empty service, so
+     * a process start that reuses an existing session would otherwise never check integrity at all.
+     */
+    @JvmStatic
+    fun verifyBundledPackagesIntegrityAsync(context: Context) {
+        val applicationContext = context.applicationContext
+        Thread {
+            checkBundledPackagesIntegrityIfIdle(applicationContext)
+        }.apply {
+            isDaemon = true
+            name = "TermuxPkgIntegrity"
+            start()
+        }
+    }
+
+    /**
+     * Verify that the installed Termux:API CLI package is still the build that targets the API
+     * integrated into this APK, and restore it when it is not.
+     *
+     * `apt-mark hold` is applied once by [installEssentialPackages] and nothing ever re-checked it,
+     * so a single unhold plus `pkg upgrade` used to replace the helper with the upstream build
+     * permanently and silently break every `termux-*` command. The check is deliberately cheap -
+     * one 11 KB binary plus the dpkg status file - so it can run on every app start, and dpkg is
+     * only started when something is actually wrong.
+     *
+     * Callers must already be off the main thread. Never throws.
+     */
+    private fun checkBundledPackagesIntegrityIfIdle(context: Context) {
+        if (!packageIntegrityCheckRunning.compareAndSet(false, true)) {
+            Logger.logVerbose(LOG_TAG, "Bundled package integrity check already running")
+            return
+        }
+
+        try {
+            if (!FileUtils.directoryFileExists(TERMUX_PREFIX_DIR_PATH, true)) return
+            val dpkg = File(TERMUX_PREFIX_DIR_PATH, "bin/dpkg")
+            if (!dpkg.canExecute()) return
+
+            val statusText = try {
+                File(TERMUX_PREFIX_DIR_PATH, "var/lib/dpkg/status").readText()
+            } catch (e: Exception) {
+                Logger.logVerbose(LOG_TAG, "Skipping bundled package integrity check: dpkg status unavailable")
+                return
+            }
+
+            val architecture = when (Build.SUPPORTED_ABIS.firstOrNull()) {
+                "arm64-v8a" -> "aarch64"
+                "armeabi-v7a" -> "arm"
+                "x86_64" -> "x86_64"
+                "x86" -> "i686"
+                else -> return
+            }
+            val assetFileName = findBundledApiPackageAsset(context, architecture)
+            val bundledVersion = assetFileName?.let { parseBundledPackageVersionFromFileName(it, architecture) }
+            val installedVersion = parseInstalledPackageVersion(statusText, BUNDLED_API_PACKAGE_NAME)
+            // A helper that cannot be read counts as absent: the package is missing rather than proven intact.
+            val installedTargetsIntegratedApi = doesHelperTargetIntegratedApi(
+                try {
+                    File(TERMUX_PREFIX_DIR_PATH, BUNDLED_API_HELPER_RELATIVE_PATH)
+                        .readBytes().toString(Charsets.ISO_8859_1)
+                } catch (e: Exception) {
+                    ""
+                }
+            )
+
+            if (assetFileName == null || bundledVersion == null) {
+                Logger.logWarn(LOG_TAG, "No bundled termux-api asset found for $architecture; skipping integrity check")
+                return
+            }
+
+            val installedVersionIsNewer = installedVersion != null &&
+                try {
+                    isVersionAtLeast(dpkg, installedVersion, bundledVersion)
+                } catch (e: Exception) {
+                    false
+                }
+
+            when (decideBundledApiPackageAction(installedVersion != null, installedTargetsIntegratedApi, installedVersionIsNewer)) {
+                BundledApiPackageAction.NONE -> Unit
+                BundledApiPackageAction.WARN_ONLY -> Logger.logWarn(
+                    LOG_TAG,
+                    "Installed termux-api $installedVersion is not older than the bundled $bundledVersion but no " +
+                        "longer targets the integrated API; refusing to downgrade it. Install the Termux-Kotlin " +
+                        "repository package to restore the integrated commands."
+                )
+                BundledApiPackageAction.INSTALL_BUNDLED -> {
+                    Logger.logInfo(
+                        LOG_TAG,
+                        "Installed termux-api " +
+                            (if (installedVersion == null) "is missing" else "was $installedVersion") +
+                            " and does not target the integrated API; reinstalling verified $bundledVersion"
+                    )
+                    installVerifiedBundledApiPackage(context, "$architecture/$assetFileName", dpkg)
+                }
+            }
+
+            // Hold drift is independent of the helper contents: an unheld package is one `pkg
+            // upgrade` away from being replaced again.
+            if (installedVersion != null &&
+                parseInstalledPackageStatus(statusText, BUNDLED_API_PACKAGE_NAME) != "Status: hold ok installed"
+            ) {
+                Logger.logInfo(LOG_TAG, "Re-applying the apt hold on termux-api")
+                markBundledApiPackageHeld(dpkg)
+            }
+        } catch (e: Exception) {
+            Logger.logStackTraceWithMessage(LOG_TAG, "Bundled package integrity check failed", e)
+        } finally {
+            packageIntegrityCheckRunning.set(false)
+        }
+    }
+
+    /** Asset file name, for example `termux-api_1%3a0.59.1-1_aarch64.deb`, or null when absent. */
+    private fun findBundledApiPackageAsset(context: Context, architecture: String): String? {
+        return try {
+            context.assets.list("bootstrap-packages/$architecture")
+                ?.filter { it.startsWith("${BUNDLED_API_PACKAGE_NAME}_") && it.endsWith("_$architecture.deb") }
+                ?.minOrNull()
+        } catch (e: Exception) {
+            Logger.logWarn(LOG_TAG, "Failed to list bundled package assets: ${e.message}")
+            null
+        }
+    }
+
+    /** Install the checksum-verified termux-api asset and re-apply its hold. */
+    private fun installVerifiedBundledApiPackage(context: Context, relativePath: String, dpkg: File): Boolean {
+        val expected = try {
+            context.assets.open("bootstrap-packages/sha256sums.txt").bufferedReader().useLines { lines ->
+                lines.filter { it.isNotBlank() && !it.startsWith("#") }
+                    .associate { line ->
+                        val parts = line.trim().split(Regex("\\s+"), limit = 2)
+                        parts[1] to parts[0].lowercase()
+                    }
+            }
+        } catch (e: Exception) {
+            Logger.logWarn(LOG_TAG, "Failed to read bundled package checksums: ${e.message}")
+            return false
+        }
+
+        val temporaryDirectory = File(context.cacheDir, "api-integrity-${relativePath.substringBefore('/')}")
+        try {
+            val checksum = expected[relativePath]
+                ?: throw IllegalStateException("Missing checksum for $relativePath")
+            temporaryDirectory.deleteRecursively()
+            temporaryDirectory.mkdirs()
+            val packageFile = File(temporaryDirectory, relativePath.substringAfter('/'))
+            context.assets.open("bootstrap-packages/$relativePath").use { input ->
+                packageFile.outputStream().use { output -> input.copyTo(output) }
+            }
+            val digest = MessageDigest.getInstance("SHA-256")
+            packageFile.inputStream().use { input ->
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    digest.update(buffer, 0, count)
+                }
+            }
+            val actual = digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+            if (actual != checksum) throw SecurityException("Checksum mismatch for $relativePath")
+
+            val install = runPrefixCommand(
+                listOf(dpkg.absolutePath, "--force-overwrite", "-i", packageFile.absolutePath),
+                OPENSSH_INSTALL_TIMEOUT_MILLIS
+            )
+            if (install.exitCode != 0) {
+                throw IllegalStateException("dpkg failed to restore $relativePath (${install.exitCode}): ${install.output}")
+            }
+            Logger.logInfo(LOG_TAG, "Restored verified package $relativePath")
+            markBundledApiPackageHeld(dpkg)
+            return true
+        } catch (e: Exception) {
+            Logger.logStackTraceWithMessage(LOG_TAG, "Failed to restore the integrated termux-api package", e)
+            return false
+        } finally {
+            temporaryDirectory.deleteRecursively()
+        }
+    }
+
+    private fun markBundledApiPackageHeld(dpkg: File) {
+        val aptMark = File(TERMUX_PREFIX_DIR_PATH, "bin/apt-mark")
+        if (!aptMark.canExecute()) {
+            Logger.logWarn(LOG_TAG, "apt-mark is unavailable; termux-api stays unheld")
+            return
+        }
+        val result = runPrefixCommand(
+            listOf(aptMark.absolutePath, "hold", BUNDLED_API_PACKAGE_NAME),
+            OPENSSH_INSTALL_TIMEOUT_MILLIS
+        )
+        if (result.exitCode != 0) {
+            Logger.logWarn(LOG_TAG, "apt-mark failed to hold termux-api (${result.exitCode}): ${result.output}")
         }
     }
 
