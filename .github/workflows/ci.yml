@@ -527,14 +527,17 @@ jobs:
   publish_repo:
     name: Publish Repo
     runs-on: ubuntu-latest
-    needs: [build_packages, emulator_test]
-    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.build_packages.result == 'success'
+    needs: [validate_prefix]
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.validate_prefix.result == 'success'
     outputs:
       status: ${{ steps.publish.outcome }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+
+      - name: Make scripts executable
+        run: chmod +x scripts/*.sh
 
       - name: Checkout gh-pages
         uses: actions/checkout@v6
@@ -552,72 +555,64 @@ jobs:
             git checkout -b gh-pages
           fi
 
-      - name: Download all package artifacts
-        uses: actions/download-artifact@v7
-        with:
-          pattern: packages-*
-          path: ./all-packages
-          merge-multiple: true
-
-      - name: Generate repository metadata
-        id: publish
+      - name: Prepare fork termux-api packages
         run: |
-          mkdir -p gh-pages/repo
-          
-          # Process each architecture
+          set -euo pipefail
+          ndk_path="${ANDROID_NDK_HOME:-}"
+          if [[ ! -d "$ndk_path" && -n "${ANDROID_HOME:-}" && -d "$ANDROID_HOME/ndk" ]]; then
+            ndk_path=$(find "$ANDROID_HOME/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)
+          fi
+
+          if [[ -n "$ndk_path" && -d "$ndk_path" ]]; then
+            echo "Building termux-api from source with Android NDK: $ndk_path"
+            ./scripts/build-termux-api-binary.sh --ndk-path "$ndk_path"
+            ./scripts/build-termux-api-deb.sh
+          else
+            echo "NOTICE: Android NDK is unavailable; publishing the committed termux-api assets."
+          fi
+
           for arch in aarch64 arm x86_64 i686; do
-            echo "Processing $arch..."
-            
-            mkdir -p gh-pages/repo/$arch
-            
-            # Copy packages
-            find ./all-packages -path "*$arch*" -name "*.deb" -exec cp {} gh-pages/repo/$arch/ \; 2>/dev/null || true
-            
-            # Generate Packages file
-            if [ -n "$(ls gh-pages/repo/$arch/*.deb 2>/dev/null)" ]; then
-              cd gh-pages/repo/$arch
-              
-              # Generate Packages using dpkg-scanpackages or manual method
-              if command -v dpkg-scanpackages >/dev/null 2>&1; then
-                dpkg-scanpackages . > Packages
-              else
-                # Manual Packages generation
-                : > Packages
-                for deb in *.deb; do
-                  if [ -f "$deb" ]; then
-                    echo "Package: $(echo "$deb" | sed 's/_.*//g')" >> Packages
-                    echo "Filename: ./$deb" >> Packages
-                    echo "Size: $(stat -c%s "$deb" 2>/dev/null || stat -f%z "$deb")" >> Packages
-                    echo "MD5sum: $(md5sum "$deb" | cut -d' ' -f1)" >> Packages
-                    echo "SHA256: $(sha256sum "$deb" | cut -d' ' -f1)" >> Packages
-                    echo "" >> Packages
-                  fi
-                done
-              fi
-              
-              # Compress
-              gzip -9 -k Packages
-              
-              # Generate Release
-              cat > Release << EOF
-          Origin: Termux-Kotlin
-          Label: Termux-Kotlin
-          Suite: stable
-          Codename: termux
-          Architecture: $arch
-          Date: $(date -R)
-          EOF
-              
-              cd ../../..
+            deb="app/src/main/assets/bootstrap-packages/$arch/termux-api_1%3a0.59.1-1_${arch}.deb"
+            if [[ ! -f "$deb" ]]; then
+              echo "ERROR: Missing expected termux-api package: $deb" >&2
+              exit 1
             fi
           done
-          
-          echo "Repository structure created"
 
-      - name: Update sources.list in bootstraps
+      - name: Generate and validate repository metadata
+        id: publish
         run: |
-          echo "# Termux-Kotlin Package Repository" > gh-pages/repo/sources.list.template
-          echo "deb https://reapercanuk39.github.io/termux-kotlin-app/repo/\${arch}/ ./" >> gh-pages/repo/sources.list.template
+          set -euo pipefail
+          mkdir -p gh-pages/repo
+
+          for arch in aarch64 arm x86_64 i686; do
+            repo_arch="gh-pages/repo/$arch"
+            source_deb="app/src/main/assets/bootstrap-packages/$arch/termux-api_1%3a0.59.1-1_${arch}.deb"
+            mkdir -p "$repo_arch"
+            find "$repo_arch" -maxdepth 1 -type f -name 'termux-api_*.deb' -delete
+            cp "$source_deb" "$repo_arch/"
+          done
+
+          GPG_KEY="" ./scripts/generate-repo.sh "$PWD/gh-pages/repo"
+
+          for arch in aarch64 arm x86_64 i686; do
+            test -f "gh-pages/repo/$arch/termux-api_1%3a0.59.1-1_${arch}.deb"
+            test -s "gh-pages/repo/$arch/Packages"
+            test -s "gh-pages/repo/$arch/Packages.gz"
+          done
+          test -s gh-pages/repo/Release
+          ./scripts/validate-repo-index.sh gh-pages/repo
+
+      - name: Update sources.list template
+        run: |
+          cat > gh-pages/repo/sources.list.template <<'EOF'
+          # Termux-Kotlin Package Repository (unsigned; trusted=yes is required)
+          # Select exactly one line for the architecture from: dpkg --print-architecture
+          # deb [trusted=yes] https://reapercanuk39.github.io/termux-kotlin-app/repo/aarch64/ ./
+          # deb [trusted=yes] https://reapercanuk39.github.io/termux-kotlin-app/repo/arm/ ./
+          # deb [trusted=yes] https://reapercanuk39.github.io/termux-kotlin-app/repo/x86_64/ ./
+          # deb [trusted=yes] https://reapercanuk39.github.io/termux-kotlin-app/repo/i686/ ./
+          EOF
 
       - name: Commit and push to gh-pages
         run: |
