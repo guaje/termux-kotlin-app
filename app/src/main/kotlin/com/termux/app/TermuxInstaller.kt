@@ -96,15 +96,22 @@ object TermuxInstaller {
     internal fun decideBundledApiPackageAction(
         isPackageInstalled: Boolean,
         doesInstalledHelperTargetIntegratedApi: Boolean,
-        isInstalledVersionAtLeastBundled: Boolean
+        installedVersionComparedToBundled: Int
     ): BundledApiPackageAction {
         if (isPackageInstalled && doesInstalledHelperTargetIntegratedApi) {
             return BundledApiPackageAction.NONE
         }
-        if (isPackageInstalled && isInstalledVersionAtLeastBundled) {
-            return BundledApiPackageAction.WARN_ONLY
+        if (!isPackageInstalled) {
+            return BundledApiPackageAction.INSTALL_BUNDLED
         }
-        return BundledApiPackageAction.INSTALL_BUNDLED
+        // An equal version is repaired, not spared: the wrong client can be published under the
+        // same version string as the fork's, so matching versions prove nothing about content.
+        // Only a strictly newer package is left alone, to avoid downgrading a deliberate upgrade.
+        return if (installedVersionComparedToBundled > 0) {
+            BundledApiPackageAction.WARN_ONLY
+        } else {
+            BundledApiPackageAction.INSTALL_BUNDLED
+        }
     }
 
     /**
@@ -856,18 +863,28 @@ object TermuxInstaller {
                 return
             }
 
-            val installedVersionIsNewer = installedVersion != null &&
+            val versionComparison = if (installedVersion == null) {
+                -1
+            } else {
                 try {
-                    isVersionAtLeast(dpkg, installedVersion, bundledVersion)
+                    compareVersions(dpkg, installedVersion, bundledVersion)
                 } catch (e: Exception) {
-                    false
+                    // dpkg is present and executable at this point, so a failure here means we
+                    // cannot reason about the version at all; restoring the verified bytes is the
+                    // conservative answer, rather than leaving a broken client in place.
+                    Logger.logWarn(LOG_TAG, "Unable to compare termux-api versions, restoring the bundled package: ${e.message}")
+                    -1
                 }
+            }
 
-            when (decideBundledApiPackageAction(installedVersion != null, installedTargetsIntegratedApi, installedVersionIsNewer)) {
-                BundledApiPackageAction.NONE -> Unit
+            when (decideBundledApiPackageAction(installedVersion != null, installedTargetsIntegratedApi, versionComparison)) {
+                BundledApiPackageAction.NONE -> Logger.logInfo(
+                    LOG_TAG,
+                    "termux-api $installedVersion still targets the integrated API and is left in place"
+                )
                 BundledApiPackageAction.WARN_ONLY -> Logger.logWarn(
                     LOG_TAG,
-                    "Installed termux-api $installedVersion is not older than the bundled $bundledVersion but no " +
+                    "Installed termux-api $installedVersion is newer than the bundled $bundledVersion but no " +
                         "longer targets the integrated API; refusing to downgrade it. Install the Termux-Kotlin " +
                         "repository package to restore the integrated commands."
                 )
@@ -1009,8 +1026,30 @@ object TermuxInstaller {
             ?: throw IllegalStateException("Installed package $packageName has no version")
     }
 
-    private fun isVersionAtLeast(dpkg: File, installedVersion: String, bundledVersion: String): Boolean {
+    /**
+     * Three-way Debian version comparison: negative when [installedVersion] is older than
+     * [bundledVersion], zero when equal, positive when newer.
+     */
+    private fun compareVersions(dpkg: File, installedVersion: String, bundledVersion: String): Int {
+        if (isVersionEqualTo(dpkg, installedVersion, bundledVersion)) return 0
+        return if (isVersionAtLeast(dpkg, installedVersion, bundledVersion)) 1 else -1
+    }
+
+    private fun isVersionEqualTo(dpkg: File, installedVersion: String, bundledVersion: String): Boolean {
         val result = runPrefixCommand(
+            listOf(dpkg.absolutePath, "--compare-versions", installedVersion, "eq", bundledVersion),
+            OPENSSH_INSTALL_TIMEOUT_MILLIS
+        )
+        return when (result.exitCode) {
+            0 -> true
+            1 -> false
+            else -> throw IllegalStateException(
+                "Unable to compare installed $installedVersion with bundled $bundledVersion: ${result.output}"
+            )
+        }
+    }
+
+    private fun isVersionAtLeast(dpkg: File, installedVersion: String, bundledVersion: String): Boolean {        val result = runPrefixCommand(
             listOf(dpkg.absolutePath, "--compare-versions", installedVersion, "ge", bundledVersion),
             OPENSSH_INSTALL_TIMEOUT_MILLIS
         )
