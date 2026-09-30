@@ -14,15 +14,17 @@ import org.junit.Test
  */
 class TermuxInstallerIntegrityTest {
     @Test
-    fun `an intact integrated package is left alone`() {
-        assertEquals(
-            TermuxInstaller.BundledApiPackageAction.NONE,
-            TermuxInstaller.decideBundledApiPackageAction(
-                isPackageInstalled = true,
-                doesInstalledHelperTargetIntegratedApi = true,
-                isInstalledVersionAtLeastBundled = true
+    fun `an intact package is left alone whatever its version`() {
+        for (comparison in intArrayOf(-1, 0, 1)) {
+            assertEquals(
+                TermuxInstaller.BundledApiPackageAction.NONE,
+                TermuxInstaller.decideBundledApiPackageAction(
+                    isPackageInstalled = true,
+                    doesInstalledHelperTargetIntegratedApi = true,
+                    installedVersionComparedToBundled = comparison
+                )
             )
-        )
+        }
     }
 
     @Test
@@ -32,7 +34,7 @@ class TermuxInstallerIntegrityTest {
             TermuxInstaller.decideBundledApiPackageAction(
                 isPackageInstalled = false,
                 doesInstalledHelperTargetIntegratedApi = false,
-                isInstalledVersionAtLeastBundled = false
+                installedVersionComparedToBundled = 0
             )
         )
     }
@@ -44,7 +46,23 @@ class TermuxInstallerIntegrityTest {
             TermuxInstaller.decideBundledApiPackageAction(
                 isPackageInstalled = true,
                 doesInstalledHelperTargetIntegratedApi = false,
-                isInstalledVersionAtLeastBundled = false
+                installedVersionComparedToBundled = -1
+            )
+        )
+    }
+
+    /**
+     * The regression that motivated this check: the wrong client published under the very same
+     * version as the fork's. Comparing versions alone reports everything as healthy here.
+     */
+    @Test
+    fun `a wrong package carrying the expected version is still replaced`() {
+        assertEquals(
+            TermuxInstaller.BundledApiPackageAction.INSTALL_BUNDLED,
+            TermuxInstaller.decideBundledApiPackageAction(
+                isPackageInstalled = true,
+                doesInstalledHelperTargetIntegratedApi = false,
+                installedVersionComparedToBundled = 0
             )
         )
     }
@@ -56,7 +74,7 @@ class TermuxInstallerIntegrityTest {
             TermuxInstaller.decideBundledApiPackageAction(
                 isPackageInstalled = true,
                 doesInstalledHelperTargetIntegratedApi = false,
-                isInstalledVersionAtLeastBundled = true
+                installedVersionComparedToBundled = 1
             )
         )
     }
