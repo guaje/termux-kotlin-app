@@ -1,8 +1,8 @@
-#!/bin/sh
-# POSIX-compliant package change detection script
+#!/usr/bin/env bash
+# Package change detection script
 # Detects which packages need rebuilding based on git changes
 
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -37,7 +37,7 @@ log_package() {
 # Get the last successful build commit from various sources
 get_last_successful_commit() {
     # Try environment variable first (set by CI)
-    if [ -n "$LAST_SUCCESSFUL_COMMIT" ]; then
+    if [ -n "${LAST_SUCCESSFUL_COMMIT:-}" ]; then
         echo "$LAST_SUCCESSFUL_COMMIT"
         return 0
     fi
@@ -49,10 +49,10 @@ get_last_successful_commit() {
     fi
     
     # Try GitHub API if available
-    if [ -n "$GITHUB_TOKEN" ] && [ -n "$GITHUB_REPOSITORY" ]; then
+    if [ -n "${GITHUB_TOKEN:-}" ] && [ -n "${GITHUB_REPOSITORY:-}" ]; then
         last_commit=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
             "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs?status=success&per_page=1" | \
-            grep -o '"head_sha": *"[^"]*"' | head -1 | cut -d'"' -f4)
+            grep -o '"head_sha": *"[^"]*"' | sed -n '1p' | cut -d'"' -f4)
         if [ -n "$last_commit" ]; then
             echo "$last_commit"
             return 0
@@ -97,6 +97,9 @@ extract_package_name() {
         packages/*/*)
             echo "$file_path" | sed 's|packages/||' | cut -d/ -f1
             ;;
+        app/src/main/cpp/termux-api/*|scripts/build-termux-api-*.sh)
+            echo "termux-api"
+            ;;
         *)
             # Not a package file
             echo ""
@@ -108,7 +111,7 @@ extract_package_name() {
 check_bootstrap_changes() {
     changed_files="$1"
     
-    echo "$changed_files" | grep -qE "^(bootstrap/|scripts/build-bootstrap|scripts/build-custom-bootstrap)" && echo "yes" || echo "no"
+    grep -qE "^(bootstrap/|scripts/build-bootstrap|scripts/build-custom-bootstrap)" <<< "$changed_files" && echo "yes" || echo "no"
 }
 
 # Check if core build infrastructure changed
@@ -116,7 +119,7 @@ check_infra_changes() {
     changed_files="$1"
     
     # If these change, rebuild everything
-    echo "$changed_files" | grep -qE "^(termux-packages/scripts/|termux-packages/build-package\.sh|scripts/properties\.sh)" && echo "yes" || echo "no"
+    grep -qE "^(termux-packages/scripts/|termux-packages/build-package\.sh|scripts/properties\.sh)" <<< "$changed_files" && echo "yes" || echo "no"
 }
 
 # Check for forbidden prefix in changed files
@@ -166,7 +169,7 @@ main() {
     fi
     
     log_info "Changed files:"
-    echo "$changed_files" | head -20 | while read -r f; do
+    printf '%s\n' "$changed_files" | sed -n '1,20p' | while read -r f; do
         echo "  - $f" >&2
     done
     
@@ -237,7 +240,7 @@ main() {
     fi
     
     # GitHub Actions output format
-    if [ -n "$GITHUB_OUTPUT" ]; then
+    if [ -n "${GITHUB_OUTPUT:-}" ]; then
         if [ -f "$CHANGED_PACKAGES_FILE" ] && [ -s "$CHANGED_PACKAGES_FILE" ]; then
             packages=$(tr '\n' ',' < "$CHANGED_PACKAGES_FILE" | sed 's/,$//')
             echo "packages=$packages" >> "$GITHUB_OUTPUT"

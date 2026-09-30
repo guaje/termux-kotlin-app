@@ -50,3 +50,13 @@ signing.properties
 repo/**/*.deb
 # Verified bootstrap packages are application assets and must be version controlled.
 !app/src/main/assets/bootstrap-packages/**/*.deb
+
+# Repository indexes are generated at publication time by scripts/generate-repo.sh
+# from the .deb files themselves, so they are never stored in the source tree: an
+# index committed without its packages advertises files that no longer exist.
+repo/Release
+repo/Release.gpg
+repo/InRelease
+repo/*/Packages
+repo/*/Packages.gz
+repo/*/Packages.xz
