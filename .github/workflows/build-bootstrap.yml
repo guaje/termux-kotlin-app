@@ -187,8 +187,10 @@ jobs:
 
             - Built apt/dpkg from source with com.termux.kotlin paths
             - Architecture: ${{ github.event.inputs.architecture }}
-            - Fixes apt methods path issue"
-            
+            - Fixes apt methods path issue
+
+            [skip ci]"
+
             git push origin HEAD:main
           fi
 

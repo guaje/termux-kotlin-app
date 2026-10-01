@@ -36,8 +36,13 @@ permissions:
   id-token: write
 
 concurrency:
+  # One run per workflow file + ref. Pull request events carry refs/pull/<n>/merge, so a PR only
+  # ever supersedes its own previous run.
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Pushes to main must not cancel what is already running: the four bootstrap legs inherit the
+  # default 6h ceiling, so a second push to main was killing the run that was validating the first,
+  # including the emulator job. Scheduled and manually dispatched main runs queue instead.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 env:
   PACKAGE_NAME: com.termux
@@ -468,7 +473,7 @@ jobs:
     # false on every push, pull request and scheduled run and the smoke tests never executed.
     # Only a "skip" explicitly chosen when dispatching the workflow may suppress them now.
     if: needs.build_apk.result == 'success' && (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_emulator_test != 'true')
-    timeout-minutes: 30
+    timeout-minutes: 60
     outputs:
       status: ${{ steps.test.outcome }}
       tests_passed: ${{ steps.test.outputs.tests_passed }}
