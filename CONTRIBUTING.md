@@ -134,3 +134,12 @@ Run locally before pushing:
 ## 📜 License
 
 By contributing, you agree that your contributions will be licensed under the GPLv3 license.
+
+## CHANGELOG.md is hand-written
+
+`CHANGELOG.md` describes **changes**, not build runs. CI does not write it, and
+per-build results belong in the pull request comment and the release notes, which
+are read at the moment they matter. Please do not add a workflow that commits
+generated entries to `main`: an automated commit on every push makes ordinary
+pushes non-fast-forward for everyone with an in-flight branch, and the entries
+have no consumer.

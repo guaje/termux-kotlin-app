@@ -843,94 +843,6 @@ jobs:
           retention-days: 14
 
   # ============================================================
-  # JOB 9: Update Documentation
-  # ============================================================
-  update_docs:
-    name: Update Docs
-    runs-on: ubuntu-latest
-    needs: [validate_prefix, build_apk, emulator_test]
-    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
-    outputs:
-      status: ${{ steps.update.outcome }}
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Download test results
-        uses: actions/download-artifact@v7
-        with:
-          name: emulator-test-results
-          path: ./test-results
-        continue-on-error: true
-
-      - name: Update CHANGELOG.md
-        id: update
-        run: |
-          # Create temp changelog entry
-          ENTRY="## [$(date +%Y-%m-%d)] Build #${{ github.run_number }}
-          
-          ### Changes
-          $(git log --oneline -5 | sed 's/^/- /')
-          
-          ### Build Status
-          - Prefix Validation: ${{ needs.validate_prefix.result }}
-          - APK Build: ${{ needs.build_apk.result }}
-          - Emulator Tests: ${{ needs.emulator_test.result }}
-          
-          ---
-          "
-          
-          # Prepend to CHANGELOG.md
-          if [ -f CHANGELOG.md ]; then
-            echo "$ENTRY" | cat - CHANGELOG.md > CHANGELOG.md.tmp
-            mv CHANGELOG.md.tmp CHANGELOG.md
-          else
-            echo "$ENTRY" > CHANGELOG.md
-          fi
-
-      - name: Update error.md on failures
-        if: needs.build_apk.result == 'failure' || needs.emulator_test.result == 'failure'
-        run: |
-          ENTRY="## Build #${{ github.run_number }} - $(date -u '+%Y-%m-%d %H:%M UTC')
-          
-          ### Failed Jobs
-          $([ "${{ needs.build_apk.result }}" == "failure" ] && echo "- APK Build")
-          $([ "${{ needs.emulator_test.result }}" == "failure" ] && echo "- Emulator Tests")
-          
-          ### Commit
-          - SHA: ${{ github.sha }}
-          - Author: ${{ github.actor }}
-          
-          ---
-          "
-          
-          if [ -f error.md ]; then
-            echo "$ENTRY" | cat - error.md > error.md.tmp
-            mv error.md.tmp error.md
-          else
-            echo "$ENTRY" > error.md
-          fi
-
-      - name: Commit documentation updates
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          git add CHANGELOG.md error.md 2>/dev/null || true
-          
-          if git diff --staged --quiet; then
-            echo "No documentation changes to commit"
-          else
-            git commit -m "docs: Update build documentation [skip ci]"
-            git push
-          fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # ============================================================
   # JOB 10: PR Comment
   # ============================================================
   pr_comment:
@@ -1005,7 +917,7 @@ jobs:
   cleanup:
     name: Cleanup
     runs-on: ubuntu-latest
-    needs: [update_docs]
+    needs: [build_apk]
     if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
