@@ -632,16 +632,27 @@ jobs:
           test -s pages/repo/Release
           ./scripts/validate-repo-index.sh pages/repo
 
-      - name: Update sources.list template
+      - name: Write the apt source snippet
         run: |
-          cat > pages/repo/sources.list.template <<'EOF'
-          # Termux-Kotlin Package Repository (unsigned; trusted=yes is required)
-          # Select exactly one line for the architecture from: dpkg --print-architecture
-          # deb [trusted=yes] https://reapercanuk39.github.io/termux-kotlin-app/repo/aarch64/ ./
-          # deb [trusted=yes] https://reapercanuk39.github.io/termux-kotlin-app/repo/arm/ ./
-          # deb [trusted=yes] https://reapercanuk39.github.io/termux-kotlin-app/repo/x86_64/ ./
-          # deb [trusted=yes] https://reapercanuk39.github.io/termux-kotlin-app/repo/i686/ ./
-          EOF
+          set -euo pipefail
+          # Derived from the repository running the workflow, so the feed URL cannot silently point
+          # somewhere else. One line rather than four: pasting four sources leaves apt complaining
+          # about the three that do not match the device.
+          owner="$(printf '%s' "${GITHUB_REPOSITORY%%/*}" | tr '[:upper:]' '[:lower:]')"
+          repo="${GITHUB_REPOSITORY##*/}"
+          cat > pages/repo/sources.list.template <<'TEMPLATE'
+          # Termux-Kotlin package feed (unsigned, so [trusted=yes] is required).
+          #
+          # Install in one command on the device:
+          #   echo "deb [trusted=yes] __BASE__/$(dpkg --print-architecture)/ ./" \
+          #     > "$PREFIX/etc/apt/sources.list.d/termux-kotlin.list"
+          #   pkg update
+          #
+          # Or write the line yourself, using the architecture reported by
+          # dpkg --print-architecture: aarch64, arm, x86_64 or i686.
+          deb [trusted=yes] __BASE__/ARCH/ ./
+          TEMPLATE
+          sed -i "s|__BASE__|https://${owner}.github.io/${repo}/repo|g" pages/repo/sources.list.template
 
       - name: Publish pages branch
         env:
@@ -811,10 +822,15 @@ jobs:
           
           ## Package Repository
           
-          Configure sources.list:
+          Configure sources.list (the feed is unsigned, so [trusted=yes] is required):
           \`\`\`
-          deb https://reapercanuk39.github.io/termux-kotlin-app/repo/<arch>/ ./
+          deb [trusted=yes] https://<owner>.github.io/<repo>/repo/<arch>/ ./
           \`\`\`
+
+          Substitute <owner>/<repo> with ${{ github.repository }} (owner in lower case, as GitHub
+          Pages serves it) and <arch> with the device's dpkg --print-architecture. The exact line
+          for this repository is published at
+          https://github.com/${{ github.repository }}/blob/gh-pages/repo/sources.list.template
           
           ---
           

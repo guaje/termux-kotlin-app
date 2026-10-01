@@ -25,16 +25,18 @@ This is not a `dists/<suite>/<component>` repository. The source URL must theref
 
 ## Configure APT
 
-Run `dpkg --print-architecture`, then add exactly one matching line to `$PREFIX/etc/apt/sources.list.d/termux-kotlin.list`:
+Point apt at the feed for your device. The URL is this repository's GitHub Pages site, and the
+architecture directory comes from `dpkg --print-architecture` (`aarch64`, `arm`, `x86_64` or
+`i686`). Add exactly one `deb` line - a second line for an architecture you do not have makes apt
+complain about it on every run:
 
-```text
-deb [trusted=yes] https://reapercanuk39.github.io/termux-kotlin-app/repo/aarch64/ ./
-deb [trusted=yes] https://reapercanuk39.github.io/termux-kotlin-app/repo/arm/ ./
-deb [trusted=yes] https://reapercanuk39.github.io/termux-kotlin-app/repo/x86_64/ ./
-deb [trusted=yes] https://reapercanuk39.github.io/termux-kotlin-app/repo/i686/ ./
+```sh
+echo "deb [trusted=yes] https://OWNER.github.io/REPO/repo/$(dpkg --print-architecture)/ ./" \
+  > "$PREFIX/etc/apt/sources.list.d/termux-kotlin.list"
 ```
 
-For example, an aarch64 device should contain only the first line. Then run:
+The published `repo/sources.list.template` contains the same instruction with the correct URL
+already filled in, because the publish job generates it from the repository that ran it.
 
 ```sh
 pkg update
