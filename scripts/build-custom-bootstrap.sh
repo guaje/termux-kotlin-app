@@ -13,9 +13,11 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TERMUX_PACKAGES_DIR="/root/termux-packages"
-OUTPUT_DIR="/root/termux-kotlin-bootstrap"
-APP_DIR="/root/termux-kotlin-app"
+# Overridable so the script can run somewhere other than a login shell under /root, for example a
+# CI runner whose home is /home/runner. The defaults are unchanged for existing local use.
+TERMUX_PACKAGES_DIR="${TERMUX_PACKAGES_DIR:-/root/termux-packages}"
+OUTPUT_DIR="${OUTPUT_DIR:-/root/termux-kotlin-bootstrap}"
+APP_DIR="${APP_DIR:-/root/termux-kotlin-app}"
 PACKAGE_NAME="com.termux"
 
 # Default to arm64 only (most common)
