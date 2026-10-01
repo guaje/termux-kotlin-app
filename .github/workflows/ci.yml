@@ -272,6 +272,21 @@ jobs:
       - name: Make scripts executable
         run: chmod +x scripts/*.sh
 
+      - name: Fetch termux-packages source
+        id: source
+        run: |
+          set -euo pipefail
+          # build-custom-bootstrap.sh drives the termux build system, which needs a checkout of
+          # termux-packages. The path used to be hardcoded to /root/termux-packages, which no
+          # GitHub-hosted runner has, so the job failed its preflight without building anything.
+          export TERMUX_PACKAGES_DIR="${TERMUX_PACKAGES_DIR:-$GITHUB_WORKSPACE/termux-packages}"
+          echo "dir=$TERMUX_PACKAGES_DIR" >> "$GITHUB_OUTPUT"
+          if [ -d "$TERMUX_PACKAGES_DIR/.git" ]; then
+            echo "Reusing existing checkout at $TERMUX_PACKAGES_DIR"
+            exit 0
+          fi
+          git clone --depth 1 --single-branch https://github.com/termux/termux-packages.git "$TERMUX_PACKAGES_DIR"
+
       - name: Download built packages
         uses: actions/download-artifact@v7
         with:
@@ -297,6 +312,10 @@ jobs:
 
       - name: Build bootstrap for ${{ matrix.arch }}
         id: build
+        env:
+          TERMUX_PACKAGES_DIR: ${{ steps.source.outputs.dir }}
+          OUTPUT_DIR: ${{ github.workspace }}/bootstrap-out
+          APP_DIR: ${{ github.workspace }}
         run: |
           echo "Building bootstrap for ${{ matrix.arch }}..."
           
@@ -311,7 +330,9 @@ jobs:
           fi
           
           # Copy output
-          cp -v app/src/main/cpp/bootstrap-${{ matrix.arch }}.zip new_bootstrap/ 2>/dev/null || true
+          # Collect whatever the build produced. It used to copy from app/src/main/cpp/, where the
+          # script has never written: it places bootstrap zips in OUTPUT_DIR.
+          cp -v "$OUTPUT_DIR"/bootstrap-*.zip new_bootstrap/ 2>/dev/null || true
 
       - name: Validate bootstrap
         run: |
@@ -373,7 +394,10 @@ jobs:
   build_apk:
     name: Build APK
     runs-on: ubuntu-latest
-    needs: [validate_prefix, build_bootstrap]
+    # The bootstrap is an optional input: "Download bootstraps" is continue-on-error and the copy
+    # step swallows failures, so the APK builds without it. Depending on build_bootstrap here put
+    # the APK, and therefore every test that needs it, behind a job that cannot currently succeed.
+    needs: [validate_prefix]
     if: always() && needs.validate_prefix.result == 'success'
     outputs:
       status: ${{ steps.build.outcome }}
@@ -440,7 +464,10 @@ jobs:
     name: Emulator Tests
     runs-on: ubuntu-latest
     needs: [build_apk]
-    if: needs.build_apk.result == 'success' && github.event.inputs.skip_emulator_test != 'true'
+    # github.event.inputs only exists for workflow_dispatch runs, so the previous condition was
+    # false on every push, pull request and scheduled run and the smoke tests never executed.
+    # Only a "skip" explicitly chosen when dispatching the workflow may suppress them now.
+    if: needs.build_apk.result == 'success' && (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_emulator_test != 'true')
     timeout-minutes: 30
     outputs:
       status: ${{ steps.test.outcome }}
