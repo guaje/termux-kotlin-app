@@ -571,21 +571,16 @@ jobs:
       - name: Make scripts executable
         run: chmod +x scripts/*.sh
 
-      - name: Checkout gh-pages
-        uses: actions/checkout@v6
-        with:
-          ref: gh-pages
-          path: gh-pages
-        continue-on-error: true
-
-      - name: Create gh-pages if not exists
-        run: |
-          if [ ! -d "gh-pages/.git" ]; then
-            mkdir -p gh-pages
-            cd gh-pages
-            git init
-            git checkout -b gh-pages
-          fi
+      # The package feed is generated entirely from this repository: the epoch termux-api .deb
+      # files come from app/src/main/assets/bootstrap-packages/ and Packages/Release are rebuilt
+      # from those files by scripts/generate-repo.sh. Nothing is inherited from a previous
+      # publication, which is why there is deliberately no gh-pages checkout here.
+      #
+      # Do not reintroduce that inheritance. A checkout with `ref: gh-pages` cannot tell "branch
+      # does not exist" from "checkout failed": either way it leaves a .git directory behind, so
+      # the existence guard that used to follow it reported the opposite of the truth and the
+      # push then asked for a ref that had never been created. If another package belongs on the
+      # feed, stage it from the repository in the step below.
 
       - name: Prepare fork termux-api packages
         run: |
@@ -615,29 +610,31 @@ jobs:
         id: publish
         run: |
           set -euo pipefail
-          mkdir -p gh-pages/repo
+          # Built from scratch every run: the feed is a function of the repository, so a stale
+          # file left over from an older publication cannot survive into it.
+          rm -rf pages
+          mkdir -p pages/repo
 
           for arch in aarch64 arm x86_64 i686; do
-            repo_arch="gh-pages/repo/$arch"
+            repo_arch="pages/repo/$arch"
             source_deb="app/src/main/assets/bootstrap-packages/$arch/termux-api_1%3a0.59.1-1_${arch}.deb"
             mkdir -p "$repo_arch"
-            find "$repo_arch" -maxdepth 1 -type f -name 'termux-api_*.deb' -delete
             cp "$source_deb" "$repo_arch/"
           done
 
-          GPG_KEY="" ./scripts/generate-repo.sh "$PWD/gh-pages/repo"
+          GPG_KEY="" ./scripts/generate-repo.sh "$PWD/pages/repo"
 
           for arch in aarch64 arm x86_64 i686; do
-            test -f "gh-pages/repo/$arch/termux-api_1%3a0.59.1-1_${arch}.deb"
-            test -s "gh-pages/repo/$arch/Packages"
-            test -s "gh-pages/repo/$arch/Packages.gz"
+            test -f "pages/repo/$arch/termux-api_1%3a0.59.1-1_${arch}.deb"
+            test -s "pages/repo/$arch/Packages"
+            test -s "pages/repo/$arch/Packages.gz"
           done
-          test -s gh-pages/repo/Release
-          ./scripts/validate-repo-index.sh gh-pages/repo
+          test -s pages/repo/Release
+          ./scripts/validate-repo-index.sh pages/repo
 
       - name: Update sources.list template
         run: |
-          cat > gh-pages/repo/sources.list.template <<'EOF'
+          cat > pages/repo/sources.list.template <<'EOF'
           # Termux-Kotlin Package Repository (unsigned; trusted=yes is required)
           # Select exactly one line for the architecture from: dpkg --print-architecture
           # deb [trusted=yes] https://reapercanuk39.github.io/termux-kotlin-app/repo/aarch64/ ./
@@ -646,22 +643,30 @@ jobs:
           # deb [trusted=yes] https://reapercanuk39.github.io/termux-kotlin-app/repo/i686/ ./
           EOF
 
-      - name: Commit and push to gh-pages
-        run: |
-          cd gh-pages
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          git add -A
-          
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "Update package repository [skip ci]"
-            git push origin gh-pages --force
-          fi
+      - name: Publish pages branch
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd pages
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+
+          if git diff --staged --quiet; then
+            echo "Feed is unchanged, nothing to publish"
+          else
+            git commit -q -m "Publish package repository [skip ci]"
+            # This nested repository has no credentials of its own, unlike a directory produced by
+            # actions/checkout. Authenticate with a per-command header instead of putting the
+            # token in the remote URL. Pushing HEAD rather than a branch name means the push does
+            # not depend on a ref that only exists after the first commit.
+            auth=$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)
+            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
+              push --force "https://github.com/${{ github.repository }}" HEAD:gh-pages
+          fi
 
       - name: Collect failure logs
         if: failure()
