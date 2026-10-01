@@ -16,6 +16,22 @@ file_size() {
 extract_control() {
     local deb="$1"
     local control_archive
+    local control_dir
+    local tar_flag=""
+
+    # dpkg-deb understands every deb compression, and deb 1.3+ ships a zstd control archive by
+    # default, so prefer it over unpacking the ar member by hand.
+    if command -v dpkg-deb >/dev/null 2>&1; then
+        control_dir=$(mktemp -d "${TMPDIR:-/tmp}/debcontrol.XXXXXX")
+        if dpkg-deb --control "$deb" "$control_dir" >/dev/null 2>&1 && [[ -f "$control_dir/control" ]]; then
+            cat "$control_dir/control"
+            rm -rf "$control_dir"
+            return 0
+        fi
+        rm -rf "$control_dir"
+        echo "ERROR: dpkg-deb failed to extract the control archive from $deb" >&2
+        return 1
+    fi
 
     control_archive=$(ar t "$deb" | sed -n '/^control\.tar/ { p; q; }')
     if [[ -z "$control_archive" ]]; then
@@ -23,7 +39,15 @@ extract_control() {
         return 1
     fi
 
-    ar p "$deb" "$control_archive" | tar -xO ./control
+    # GNU tar does not autodetect the member's compression the way bsdtar does, so pick the flag
+    # from the member name; zstd control archives otherwise abort the whole run.
+    case "$control_archive" in
+        *.zst | *.zstd) tar_flag="--zstd" ;;
+        *.xz) tar_flag="-J" ;;
+        *.gz) tar_flag="-z" ;;
+    esac
+
+    ar p "$deb" "$control_archive" | tar -xO ${tar_flag:+$tar_flag} ./control
 }
 
 generate_packages() {
