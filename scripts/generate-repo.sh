@@ -7,7 +7,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${1:-$SCRIPT_DIR/../repo}"
 GPG_KEY="${GPG_KEY:-}"
 GENERATE_XZ="${GENERATE_XZ:-false}"
-ARCHITECTURES=(aarch64 arm x86_64 i686 all)
+# Only the four architectures the flat feed actually publishes. A Debian "all" bucket is for
+# architecture-independent packages; nothing stages any .deb into it, and a flat repository has no
+# Packages-arch-all mechanism, so an all/ index is unreachable clutter that apt never reads.
+ARCHITECTURES=(aarch64 arm x86_64 i686)
 
 file_size() {
     stat -c%s "$1" 2>/dev/null || stat -f%z "$1"
@@ -93,7 +96,7 @@ Origin: Termux-Kotlin
 Label: Termux-Kotlin
 Suite: stable
 Codename: termux-kotlin
-Architectures: aarch64 arm x86_64 i686 all
+Architectures: aarch64 arm x86_64 i686
 Components: main
 Description: Termux-Kotlin Package Repository
 Date: $(date -R)
