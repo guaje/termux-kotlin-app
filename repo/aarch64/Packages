@@ -1,0 +1,14 @@
+Package: termux-api
+Version: 1:0.59.1-1
+Architecture: aarch64
+Maintainer: @termux
+Installed-Size: 316
+Depends: bash, util-linux
+Homepage: https://wiki.termux.com/wiki/Termux:API
+Description: Termux API commands (integrated into Termux-Kotlin app)
+ This package provides command line tools for accessing Android system
+ The API receiver is built into the main Termux-Kotlin app.
+Filename: aarch64/termux-api_1%3a0.59.1-1_aarch64.deb
+Size: 26946
+SHA256: 580fe8b4890ca4ddbc6d899b0057b279d469da7e251bebf9421ce196f80552f6
+
