@@ -1,7 +1,7 @@
 package com.termux.shared.termux.settings.preferences
 
 /*
- * Version: v0.16.0
+ * Version: v0.17.0
  *
  * Changelog
  *
@@ -11,6 +11,8 @@ package com.termux.shared.termux.settings.preferences
  * - 0.16.0 (2022-06-11)
  *      - Added following to `TERMUX_APP`:
  *          `KEY_APP_SHELL_NUMBER_SINCE_BOOT` and `KEY_TERMINAL_SESSION_NUMBER_SINCE_BOOT`.
+ * - 0.17.0 (2026-10-01)
+ *      - Added background reliability and restorable session preferences to `TERMUX_APP`.
  */
 
 /**
@@ -59,6 +61,47 @@ object TermuxPreferenceConstants {
          */
         const val KEY_KEEP_SCREEN_ON: String = "screen_always_on"
         const val DEFAULT_VALUE_KEEP_SCREEN_ON: Boolean = false
+
+        /**
+         * Defines the key for whether the Termux service wake lock is enabled.
+         */
+        const val KEY_WAKE_LOCK_ENABLED: String = "wake_lock_enabled"
+        const val DEFAULT_VALUE_KEY_WAKE_LOCK_ENABLED: Boolean = false
+
+        /**
+         * Defines the key for whether restorable terminal sessions are restored.
+         */
+        const val KEY_RESTORE_SESSIONS_ENABLED: String = "restore_sessions_enabled"
+        const val DEFAULT_VALUE_KEY_RESTORE_SESSIONS_ENABLED: Boolean = false
+
+        /**
+         * Defines the key for whether battery optimization warnings are enabled.
+         */
+        const val KEY_BATTERY_OPTIMIZATION_WARNING_ENABLED: String = "battery_optimization_warning_enabled"
+        const val DEFAULT_VALUE_KEY_BATTERY_OPTIMIZATION_WARNING_ENABLED: Boolean = true
+
+        /**
+         * Defines the key for whether the battery optimization warning was dismissed.
+         */
+        const val KEY_BATTERY_OPTIMIZATION_WARNING_DISMISSED: String = "battery_optimization_warning_dismissed"
+        const val DEFAULT_VALUE_KEY_BATTERY_OPTIMIZATION_WARNING_DISMISSED: Boolean = false
+
+        /**
+         * Defines the key for whether phantom process warnings are enabled.
+         */
+        const val KEY_PHANTOM_PROCESS_WARNING_ENABLED: String = "phantom_process_warning_enabled"
+        const val DEFAULT_VALUE_KEY_PHANTOM_PROCESS_WARNING_ENABLED: Boolean = true
+
+        /**
+         * Defines the key for whether the phantom process warning was dismissed.
+         */
+        const val KEY_PHANTOM_PROCESS_WARNING_DISMISSED: String = "phantom_process_warning_dismissed"
+        const val DEFAULT_VALUE_KEY_PHANTOM_PROCESS_WARNING_DISMISSED: Boolean = false
+
+        /**
+         * Defines the key for the restorable terminal sessions snapshot.
+         */
+        const val KEY_RESTORABLE_SESSIONS_SNAPSHOT: String = "restorable_sessions_snapshot"
 
         /**
          * Defines the key for font size of termux terminal view.

@@ -243,6 +243,7 @@ class RunCommandService : Service() {
 
     private fun stopService(): Int {
         runStopForeground()
+        stopSelf()
         return START_NOT_STICKY
     }
 
@@ -255,7 +256,7 @@ class RunCommandService : Service() {
 
     private fun runStopForeground() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            stopForeground(true)
+            stopForeground(STOP_FOREGROUND_REMOVE)
         }
     }
 

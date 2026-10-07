@@ -7,7 +7,12 @@ import java.io.File
 
 /**
  * A class that defines shared constants of the Termux app and its plugins.
- * Version: v0.53.0
+ * Version: v0.54.0
+ *
+ * Changelog
+ *
+ * - 0.54.0 (2026-10-01)
+ *      - Added notification constants for background services and reliability warnings.
  */
 object TermuxConstants {
 
@@ -345,6 +350,14 @@ object TermuxConstants {
     @JvmField val TERMUX_FLOAT_APP_NOTIFICATION_CHANNEL_NAME = "$TERMUX_FLOAT_APP_NAME App"
     const val TERMUX_FLOAT_APP_NOTIFICATION_ID = 1339
 
+    const val TERMUX_AGENT_SERVICE_NOTIFICATION_ID = 1340
+    const val TERMUX_DEVICE_API_SERVICE_NOTIFICATION_ID = 1341
+    const val TERMUX_BOOT_SERVICE_NOTIFICATION_ID = 1342
+
+    @JvmField val TERMUX_RELIABILITY_NOTIFICATION_CHANNEL_ID = "termux_reliability_notification_channel"
+    @JvmField val TERMUX_RELIABILITY_NOTIFICATION_CHANNEL_NAME = "$TERMUX_APP_NAME Background Reliability"
+    const val TERMUX_RELIABILITY_NOTIFICATION_ID = 1343
+
     /*
      * Termux app and plugins miscellaneous variables.
      */
@@ -373,6 +386,7 @@ object TermuxConstants {
         @JvmField val FILE_VIEW_RECEIVER_ACTIVITY_CLASS_NAME = "$TERMUX_PACKAGE_NAME.app.api.file.FileViewReceiverActivity"
 
         @JvmField val TERMUX_ACTIVITY_NAME = "$TERMUX_PACKAGE_NAME.app.TermuxActivity"
+        @JvmField val ACTION_RELIABILITY_WARNING_DISMISSED = "$TERMUX_PACKAGE_NAME.app.reliability_warning_dismissed"
 
         /**
          * Termux app core activity.

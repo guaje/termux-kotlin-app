@@ -206,6 +206,14 @@
             </intent-filter>
         </receiver>
 
+        <receiver
+            android:name=".app.reliability.ReliabilityWarningReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="${TERMUX_PACKAGE_NAME}.app.reliability_warning_dismissed" />
+            </intent-filter>
+        </receiver>
+
         <!-- Agent Worker for periodic health checks -->
         <receiver
             android:name=".app.agents.daemon.AgentWorker"

@@ -33,7 +33,7 @@ class BootScriptExecutor @Inject constructor(
     companion object {
         private const val LOG_TAG = "BootScriptExecutor"
         private const val CHANNEL_ID = "termux_boot"
-        private const val NOTIFICATION_ID = 1339
+        private const val NOTIFICATION_ID = TermuxConstants.TERMUX_BOOT_SERVICE_NOTIFICATION_ID
         
         private val PREFIX = TermuxConstants.TERMUX_PREFIX_DIR_PATH
         private val HOME = TermuxConstants.TERMUX_HOME_DIR_PATH

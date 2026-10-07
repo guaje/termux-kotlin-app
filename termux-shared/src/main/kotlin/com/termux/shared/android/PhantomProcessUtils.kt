@@ -31,6 +31,10 @@ object PhantomProcessUtils {
      */
     const val KEY_MAX_PHANTOM_PROCESSES = "max_phantom_processes"
 
+    /** DeviceConfig's persisted Settings.Global key for [KEY_MAX_PHANTOM_PROCESSES]. */
+    const val DEVICE_CONFIG_SETTINGS_GLOBAL_KEY_MAX_PHANTOM_PROCESSES =
+        "device_config_activity_manager_max_phantom_processes"
+
     /**
      * Whether or not syncs (bulk set operations) for DeviceConfig are disabled currently.
      */
@@ -49,6 +53,9 @@ object PhantomProcessUtils {
 
     /**
      * Get currently enforced ActivityManagerConstants MAX_PHANTOM_PROCESSES value, defaults to 32.
+     *
+     * This normally returns `null` for regular installs because reading the enforced value requires
+     * the privileged `android.permission.DUMP` permission (and package usage access).
      *
      * @param context The [Context] for operations.
      * @return Returns [Integer].
@@ -118,14 +125,14 @@ object PhantomProcessUtils {
             return "Phantom process killing is not relevant on this Android version."
         }
 
-        return """Android 12+ may kill Termux processes after 32 total phantom processes across all apps.
+        return """Android 12+ may kill phantom processes when the device-wide limit is reached. Other apps contribute to the same limit.
 
 Workarounds:
 1. Use ADB to disable phantom process killing:
    adb shell "settings put global settings_enable_monitor_phantom_procs false"
 
-2. Use ADB to increase max phantom processes:
-   adb shell "device_config put activity_manager max_phantom_processes 2147483647"
+2. Use ADB to increase the device-wide maximum phantom processes:
+   adb shell "settings put global max_phantom_processes 32768"
 
 3. Disable battery optimization for Termux in Android settings.
 

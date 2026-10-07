@@ -34,8 +34,13 @@ object TermuxNotificationUtils {
         val lastNotificationId = preferences.getLastNotificationId()
 
         var nextNotificationId = lastNotificationId + 1
-        while (nextNotificationId == TermuxConstants.TERMUX_APP_NOTIFICATION_ID || 
-               nextNotificationId == TermuxConstants.TERMUX_RUN_COMMAND_NOTIFICATION_ID) {
+        while (nextNotificationId == TermuxConstants.TERMUX_APP_NOTIFICATION_ID ||
+               nextNotificationId == TermuxConstants.TERMUX_RUN_COMMAND_NOTIFICATION_ID ||
+               nextNotificationId == TermuxConstants.TERMUX_FLOAT_APP_NOTIFICATION_ID ||
+               nextNotificationId == TermuxConstants.TERMUX_AGENT_SERVICE_NOTIFICATION_ID ||
+               nextNotificationId == TermuxConstants.TERMUX_DEVICE_API_SERVICE_NOTIFICATION_ID ||
+               nextNotificationId == TermuxConstants.TERMUX_BOOT_SERVICE_NOTIFICATION_ID ||
+               nextNotificationId == TermuxConstants.TERMUX_RELIABILITY_NOTIFICATION_ID) {
             nextNotificationId++
         }
 

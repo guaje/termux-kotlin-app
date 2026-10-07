@@ -39,7 +39,7 @@ class AgentService : Service() {
 
     companion object {
         private const val LOG_TAG = "AgentService"
-        private const val NOTIFICATION_ID = 1338
+        private const val NOTIFICATION_ID = TermuxConstants.TERMUX_AGENT_SERVICE_NOTIFICATION_ID
         private const val CHANNEL_ID = "termux_agent_channel"
         
         // Intent actions for IPC

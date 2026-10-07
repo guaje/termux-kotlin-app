@@ -77,6 +77,54 @@ class TermuxAppSharedPreferences private constructor(context: Context) : AppShar
         SharedPreferenceUtils.setBoolean(mSharedPreferences, TERMUX_APP.KEY_KEEP_SCREEN_ON, value, false)
     }
 
+    fun isWakeLockEnabled(): Boolean {
+        return SharedPreferenceUtils.getBoolean(mSharedPreferences, TERMUX_APP.KEY_WAKE_LOCK_ENABLED, TERMUX_APP.DEFAULT_VALUE_KEY_WAKE_LOCK_ENABLED)
+    }
+
+    fun setWakeLockEnabled(value: Boolean) {
+        SharedPreferenceUtils.setBoolean(mSharedPreferences, TERMUX_APP.KEY_WAKE_LOCK_ENABLED, value, false)
+    }
+
+    fun isRestoreSessionsEnabled(): Boolean {
+        return SharedPreferenceUtils.getBoolean(mSharedPreferences, TERMUX_APP.KEY_RESTORE_SESSIONS_ENABLED, TERMUX_APP.DEFAULT_VALUE_KEY_RESTORE_SESSIONS_ENABLED)
+    }
+
+    fun setRestoreSessionsEnabled(value: Boolean) {
+        SharedPreferenceUtils.setBoolean(mSharedPreferences, TERMUX_APP.KEY_RESTORE_SESSIONS_ENABLED, value, false)
+    }
+
+    fun isBatteryOptimizationWarningEnabled(): Boolean {
+        return SharedPreferenceUtils.getBoolean(mSharedPreferences, TERMUX_APP.KEY_BATTERY_OPTIMIZATION_WARNING_ENABLED, TERMUX_APP.DEFAULT_VALUE_KEY_BATTERY_OPTIMIZATION_WARNING_ENABLED)
+    }
+
+    fun setBatteryOptimizationWarningEnabled(value: Boolean) {
+        SharedPreferenceUtils.setBoolean(mSharedPreferences, TERMUX_APP.KEY_BATTERY_OPTIMIZATION_WARNING_ENABLED, value, false)
+    }
+
+    fun isBatteryOptimizationWarningDismissed(): Boolean {
+        return SharedPreferenceUtils.getBoolean(mSharedPreferences, TERMUX_APP.KEY_BATTERY_OPTIMIZATION_WARNING_DISMISSED, TERMUX_APP.DEFAULT_VALUE_KEY_BATTERY_OPTIMIZATION_WARNING_DISMISSED)
+    }
+
+    fun setBatteryOptimizationWarningDismissed(value: Boolean) {
+        SharedPreferenceUtils.setBoolean(mSharedPreferences, TERMUX_APP.KEY_BATTERY_OPTIMIZATION_WARNING_DISMISSED, value, false)
+    }
+
+    fun isPhantomProcessWarningEnabled(): Boolean {
+        return SharedPreferenceUtils.getBoolean(mSharedPreferences, TERMUX_APP.KEY_PHANTOM_PROCESS_WARNING_ENABLED, TERMUX_APP.DEFAULT_VALUE_KEY_PHANTOM_PROCESS_WARNING_ENABLED)
+    }
+
+    fun setPhantomProcessWarningEnabled(value: Boolean) {
+        SharedPreferenceUtils.setBoolean(mSharedPreferences, TERMUX_APP.KEY_PHANTOM_PROCESS_WARNING_ENABLED, value, false)
+    }
+
+    fun isPhantomProcessWarningDismissed(): Boolean {
+        return SharedPreferenceUtils.getBoolean(mSharedPreferences, TERMUX_APP.KEY_PHANTOM_PROCESS_WARNING_DISMISSED, TERMUX_APP.DEFAULT_VALUE_KEY_PHANTOM_PROCESS_WARNING_DISMISSED)
+    }
+
+    fun setPhantomProcessWarningDismissed(value: Boolean) {
+        SharedPreferenceUtils.setBoolean(mSharedPreferences, TERMUX_APP.KEY_PHANTOM_PROCESS_WARNING_DISMISSED, value, false)
+    }
+
     fun setFontVariables(context: Context) {
         val sizes = getDefaultFontSizes(context)
 
@@ -109,6 +157,21 @@ class TermuxAppSharedPreferences private constructor(context: Context) : AppShar
 
     fun setCurrentSession(value: String?) {
         SharedPreferenceUtils.setString(mSharedPreferences, TERMUX_APP.KEY_CURRENT_SESSION, value, false)
+    }
+
+    fun getRestorableSessionsSnapshot(): String? {
+        return SharedPreferenceUtils.getString(mSharedPreferences, TERMUX_APP.KEY_RESTORABLE_SESSIONS_SNAPSHOT, null, true)
+    }
+
+    /**
+     * Store or clear the snapshot of the sessions that may be restored by the next service start.
+     *
+     * Clearing is committed to disk instead of being applied asynchronously: the clear is what guarantees
+     * that a deliberate exit by the user is not undone on the next start, and the process can be killed
+     * at any moment right after the clear, which would lose an asynchronous apply.
+     */
+    fun setRestorableSessionsSnapshot(value: String?) {
+        SharedPreferenceUtils.setString(mSharedPreferences, TERMUX_APP.KEY_RESTORABLE_SESSIONS_SNAPSHOT, value, value == null)
     }
 
     fun getLogLevel(): Int {

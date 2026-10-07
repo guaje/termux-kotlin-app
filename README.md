@@ -127,7 +127,7 @@ The app automatically configures all necessary environment variables:
 | **SSL/TLS** | `SSL_CERT_FILE`, `CURL_CA_BUNDLE` | HTTPS mirror support |
 | **SSH agent** | `SSH_AUTH_SOCK` | Shared agent socket while the Termux foreground service runs; keys stay only in RAM |
 
-See [ARCHITECTURE.md](ARCHITECTURE.md#-environment-variables) and [SSH agent](docs/SSH_AGENT.md) for the complete list and lifecycle details.
+See [ARCHITECTURE.md](ARCHITECTURE.md#-environment-variables), [SSH agent](docs/SSH_AGENT.md), and [background reliability](docs/BACKGROUND_RELIABILITY.md) for the complete environment and background-session lifecycle details.
 
 ### 🎯 Why Kotlin?
 
