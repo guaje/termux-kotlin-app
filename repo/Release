@@ -1,0 +1,17 @@
+Origin: Termux-Kotlin
+Label: Termux-Kotlin
+Suite: stable
+Codename: termux-kotlin
+Architectures: aarch64 arm x86_64 i686
+Components: main
+Description: Termux-Kotlin Package Repository
+Date: Thu, 08 Oct 2026 20:03:50 +0000
+SHA256:
+ 263ad04dd1c676e9cc279d126d90446f9493cf36ecb9c1eb4a866842b07e7ca9 518 aarch64/Packages
+ 03289020de6d5b450f93e3be0234859d0afd3672c8f1de34954668a41ea835b9 368 aarch64/Packages.gz
+ 351830335750db69aef1b5917725caea1eea4acf22d2502f8d780c7c6a0383a1 506 arm/Packages
+ dda678c2da86e0c7523e621124373e1ecb15e4daefc1971d2b17e8fa6ec1fd3f 370 arm/Packages.gz
+ f5dd575e956ab8dab19cd0eb0b35d214d7656a80d2368adbff7cd9e55b686c09 515 x86_64/Packages
+ ec8f99b5cfc4d00d3e813e46bfafa860f3aedbb45bbb09ffd702ccdd15fe7832 373 x86_64/Packages.gz
+ f592974402b18e3c8ce149a9085c7912717392011f4aa81d1b4d95b00bd07745 509 i686/Packages
+ 555b3494e55441f51463b4e453c20fc711530b45ce54c51dea276b390d0f56e0 370 i686/Packages.gz
