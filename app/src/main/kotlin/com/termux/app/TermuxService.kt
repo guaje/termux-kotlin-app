@@ -16,6 +16,10 @@ import android.os.Looper
 import android.os.PowerManager
 import com.termux.R
 import com.termux.app.event.SystemEventReceiver
+import com.termux.app.reliability.ReliabilityWarningNotifier
+import com.termux.app.reliability.TermuxServiceStopPolicy
+import com.termux.app.session.TermuxSessionSnapshotCodec
+import com.termux.app.session.TermuxSessionSnapshotMapper
 import com.termux.app.ssh.TermuxSshAgent
 import com.termux.app.terminal.TermuxTerminalSessionActivityClient
 import com.termux.app.terminal.TermuxTerminalSessionServiceClient
@@ -93,8 +97,29 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
     /** If the user has executed the [TERMUX_SERVICE.ACTION_STOP_SERVICE] intent. */
     var mWantsToStop = false
 
+    /** If the service is currently tearing itself down in [onDestroy]. */
+    private var mTearingDown = false
+
+    /** If the persisted sessions are currently being re-created by [restoreSessionsFromSnapshot]. */
+    private var mRestorePending = false
+
+    @Volatile
+    private var mAppPreferences: TermuxAppSharedPreferences? = null
+
+    /**
+     * The preferences of the app, built once per instance of the service.
+     *
+     * Building them asks the package manager for the package context of Termux, which is a binder call,
+     * and they are read while updating the notification, while snapshotting sessions and while restoring
+     * them, so the result is kept. It is rebuilt as long as it could not be built, so that a single
+     * failing lookup does not switch the preferences off for the lifetime of the service.
+     */
+    private val appPreferences: TermuxAppSharedPreferences?
+        get() = mAppPreferences ?: TermuxAppSharedPreferences.build(this)?.also { mAppPreferences = it }
+
     override fun onCreate() {
         Logger.logVerbose(LOG_TAG, "onCreate")
+        updateReliabilityWarningAsync()
 
         // Get Termux app SharedProperties without loading from disk since TermuxApplication handles
         // load and TermuxActivity handles reloads
@@ -114,9 +139,28 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
         }
         mShellManager = shellManager
 
+        // Sessions may have been left running on purpose by an earlier instance of this service that
+        // was destroyed, since onDestroy() only kills them for a deliberate user exit. Adopt them
+        // before anything else touches the sessions list.
+        adoptSessionsOfPreviousServiceInstance()
+
         ensureSshAgentRunning()
         runStartForeground()
         SystemEventReceiver.registerPackageUpdateEvents(this)
+
+        // Only ever restore the wake lock after the service is already in foreground, since
+        // actionAcquireWakeLock() updates the notification and the foreground service must be
+        // established first.
+        if (appPreferences?.isWakeLockEnabled() == true) {
+            Logger.logDebug(LOG_TAG, "Re-acquiring wake locks since the user wanted them held before the last teardown")
+            actionAcquireWakeLock()
+        }
+
+        // Restore sessions as the very last thing done in onCreate() and synchronously on the main
+        // thread: it runs strictly after runStartForeground(), so the foreground service deadline is
+        // already met, and it completes before TermuxActivity.onServiceConnected() can run, so the
+        // activity does not create a duplicate first session.
+        restoreSessionsFromSnapshot()
     }
 
     @SuppressLint("Wakelock")
@@ -144,7 +188,7 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
                 }
                 TERMUX_SERVICE.ACTION_WAKE_UNLOCK -> {
                     Logger.logDebug(LOG_TAG, "ACTION_WAKE_UNLOCK intent received")
-                    actionReleaseWakeLock(true)
+                    actionReleaseWakeLock(updateNotification = true, persistUserChoice = true)
                 }
                 TERMUX_SERVICE.ACTION_SERVICE_EXECUTE -> {
                     Logger.logDebug(LOG_TAG, "ACTION_SERVICE_EXECUTE intent received")
@@ -154,20 +198,69 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
             }
         }
 
-        // If this service really do get killed, there is no point restarting it automatically
-        return START_NOT_STICKY
+        // The snapshot is also refreshed on every start and not only when sessions are added or
+        // removed, since the user can enable restoring sessions while sessions are already running and
+        // the snapshot must then describe the sessions that exist right now. Writing the current list
+        // can never make the snapshot stale, but it must not happen while stopping, since
+        // actionStopService() just cleared the snapshot.
+        if (!mWantsToStop) snapshotSessions()
+
+        // The start intents handled above carry side effects that must never be replayed:
+        // ACTION_SERVICE_EXECUTE would duplicate a plugin command and re-deliver its result
+        // PendingIntent, ACTION_WAKE_LOCK/ACTION_WAKE_UNLOCK would undo the last wake lock toggle of
+        // the user and ACTION_STOP_SERVICE would resurrect the service just to kill it again. So the
+        // intent itself must not be redelivered. START_STICKY redelivers a null intent instead, which
+        // is already handled safely above, and everything needed to resume comes from
+        // TermuxShellManager and the persisted session snapshot, never from the intent.
+
+        // Whether nothing is left for the service to do also has to be re-checked after a start, since a
+        // start may have changed nothing, but not after every start. When the app is opened the service
+        // is started before TermuxActivity has bound and created its first session, and stopping here
+        // would take the service out of foreground mode again while the user is looking at the app and
+        // would not put it back, because a new session alone only refreshes the notification. So this
+        // runs for the two starts that are provably not followed by a session: the null intent Android
+        // redelivers after the process was killed, and a plugin command whose execution failed, after
+        // which nothing runs and nothing will. An explicit ACTION_WAKE_UNLOCK evaluates it inside
+        // actionReleaseWakeLock(), since the user just asked the service to hold nothing open.
+        if (intent == null || action == TERMUX_SERVICE.ACTION_SERVICE_EXECUTE) updateNotification()
+
+        return START_STICKY
     }
 
+    /**
+     * Tear the service down.
+     *
+     * The [TermuxSession] shells are only killed when the user deliberately asked Termux to exit,
+     * see [mWantsToStop]. For every other reason - the system destroyed the service, the ROM decided
+     * to stop it, etc. - the shells of the user are deliberately left running and only the plugin
+     * results that are still pending are processed, see
+     * [processPendingPluginCommandsWithoutKillingSessions].
+     */
     override fun onDestroy() {
         Logger.logVerbose(LOG_TAG, "onDestroy")
 
-        TermuxSshAgent.stop()
-        TermuxShellUtils.clearTermuxTMPDIR(true)
+        mTearingDown = true
 
-        actionReleaseWakeLock(false)
-        if (!mWantsToStop) killAllTermuxExecutionCommands()
+        // The wake locks are dropped with the service either way, but the persisted choice of the
+        // user must survive, since onCreate() re-acquires the locks on the next start from it.
+        actionReleaseWakeLock(updateNotification = false, persistUserChoice = false)
 
-        TermuxShellManager.onAppExit(this)
+        if (mWantsToStop) {
+            // The ssh agent socket and $PREFIX/var/tmp are app wide and shared, but nothing is left
+            // that could still be using them when the user deliberately exited.
+            TermuxSshAgent.stop()
+            TermuxShellUtils.clearTermuxTMPDIR(true)
+            killAllTermuxExecutionCommands()
+            TermuxShellManager.onAppExit(this)
+            clearRestorableSessionsSnapshot()
+        } else {
+            // The ssh agent socket is app wide and shared by the live shells, killing it would discard
+            // the identities loaded in memory. Wiping $PREFIX/var/tmp would delete files still held by
+            // the processes that were deliberately left running. And resetting the "since app start"
+            // counters is not valid either, since only the service died, not the app.
+            processPendingPluginCommandsWithoutKillingSessions()
+        }
+
         SystemEventReceiver.unregisterPackageUpdateEvents(this)
 
         runStopForeground()
@@ -210,7 +303,7 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
 
     /** Make service leave foreground mode. */
     private fun runStopForeground() {
-        stopForeground(true)
+        stopForeground(STOP_FOREGROUND_REMOVE)
     }
 
     /** Request to stop service. */
@@ -223,6 +316,8 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
     /** Process action to stop service. */
     private fun actionStopService() {
         mWantsToStop = true
+        // A deliberate exit must never resurrect the sessions that were running before it.
+        clearRestorableSessionsSnapshot()
         TermuxSshAgent.stop()
         killAllTermuxExecutionCommands()
         requestStopService()
@@ -231,8 +326,10 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
     /**
      * Kill all TermuxSessions and TermuxTasks by sending SIGKILL to their processes.
      *
-     * For TermuxSessions, all sessions will be killed, whether user manually exited Termux or if
-     * onDestroy() was directly called because of unintended shutdown.
+     * For TermuxSessions, all sessions will be killed, and this is only ever wanted when the user
+     * manually exited Termux, see [actionStopService] and [onDestroy]. When the service is destroyed
+     * for any other reason the sessions must be left alone and
+     * [processPendingPluginCommandsWithoutKillingSessions] is called instead.
      *
      * For TermuxTasks, only tasks that were started by a plugin which expects the result
      * back via a pending intent will be killed.
@@ -256,13 +353,53 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
             if (!processResult) mShellManager.mTermuxSessions.remove(session)
         }
 
+        killTermuxTasksAndProcessPendingPluginCommands(termuxTasks, pendingPluginExecutionCommands)
+    }
+
+    /**
+     * Process the [TermuxShellManager.mTermuxTasks] and [TermuxShellManager.mPendingPluginExecutionCommands]
+     * of the service without touching [TermuxShellManager.mTermuxSessions].
+     *
+     * This is called when the service is destroyed for a reason other than a user exit. The sessions
+     * of the user are left running, but plugins waiting for a result via a pending intent must still
+     * be answered with a cancelled result, otherwise they would hang forever waiting for a callback
+     * from a service that is gone.
+     */
+    @Synchronized
+    private fun processPendingPluginCommandsWithoutKillingSessions() {
+        Logger.logDebug(
+            LOG_TAG, "Processing pending plugin execution commands without killing TermuxSessions - " +
+                "TermuxSessions=${mShellManager.mTermuxSessions.size}, " +
+                "TermuxTasks=${mShellManager.mTermuxTasks.size}, " +
+                "PendingPluginExecutionCommands=${mShellManager.mPendingPluginExecutionCommands.size}"
+        )
+
+        killTermuxTasksAndProcessPendingPluginCommands(
+            ArrayList(mShellManager.mTermuxTasks),
+            ArrayList(mShellManager.mPendingPluginExecutionCommands)
+        )
+    }
+
+    /**
+     * Kill [AppShell] TermuxTasks that a plugin expects a result back for, drop the other TermuxTasks
+     * from the service and process the results of the pending plugin execution commands.
+     *
+     * @param termuxTasks The copy of the [AppShell] list to process.
+     * @param pendingPluginExecutionCommands The copy of the pending plugin [ExecutionCommand] list to process.
+     */
+    private fun killTermuxTasksAndProcessPendingPluginCommands(
+        termuxTasks: List<AppShell>,
+        pendingPluginExecutionCommands: List<ExecutionCommand>
+    ) {
         for (task in termuxTasks) {
             val executionCommand = task.executionCommand
             if (executionCommand.isPluginExecutionCommandWithPendingResult()) {
                 task.killIfExecuting(this, true)
-            } else {
-                mShellManager.mTermuxTasks.remove(task)
             }
+            // The task is dropped in both cases: its result was delivered or it never owed one. A task
+            // left in the list would keep [TermuxServiceStopPolicy] from ever letting the service stop,
+            // since a new instance of the service reads the same shared list.
+            mShellManager.mTermuxTasks.remove(task)
         }
 
         for (executionCommand in pendingPluginExecutionCommands) {
@@ -275,10 +412,16 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
                     TermuxPluginUtils.processPluginExecutionCommandResult(this, LOG_TAG, executionCommand)
                 }
             }
+            // Nothing waits for this command anymore once its result was processed, and a leftover
+            // entry would block stopping the service forever for the same reason as a leftover task.
+            mShellManager.mPendingPluginExecutionCommands.remove(executionCommand)
         }
     }
 
-    /** Process action to acquire Power and Wi-Fi WakeLocks. */
+    /**
+     * Process action to acquire Power and Wi-Fi WakeLocks and persist that the user wants them held,
+     * so that [onCreate] can acquire them again when the service is started again.
+     */
     @SuppressLint("WakelockTimeout", "BatteryLife")
     private fun actionAcquireWakeLock() {
         if (mWakeLock != null) {
@@ -302,31 +445,47 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
         )
         mWifiLock?.acquire()
 
-        if (!PermissionUtils.checkIfBatteryOptimizationsDisabled(this)) {
-            PermissionUtils.requestDisableBatteryOptimizations(this)
-        }
+        // The battery optimization exemption is intentionally *not* requested here: a wake lock that
+        // is acquired automatically on service start must never pop a modal system dialog on every
+        // start. The exemption is requested from explicit user initiated surfaces instead.
+        appPreferences?.setWakeLockEnabled(true)
 
         updateNotification()
         Logger.logDebug(LOG_TAG, "WakeLocks acquired successfully")
     }
 
-    /** Process action to release Power and Wi-Fi WakeLocks. */
-    private fun actionReleaseWakeLock(updateNotification: Boolean) {
+    /**
+     * Process action to release Power and Wi-Fi WakeLocks.
+     *
+     * @param updateNotification Whether [updateNotification] should be called after releasing.
+     * @param persistUserChoice Whether the user should be remembered as not wanting the wake locks
+     *                          anymore. This must be `false` while tearing the service down, since
+     *                          [onCreate] re-acquires the wake locks from the persisted choice.
+     */
+    private fun actionReleaseWakeLock(updateNotification: Boolean, persistUserChoice: Boolean = true) {
         if (mWakeLock == null && mWifiLock == null) {
             Logger.logDebug(LOG_TAG, "Ignoring releasing WakeLocks since none are already held")
-            return
+        } else {
+            Logger.logDebug(LOG_TAG, "Releasing WakeLocks")
+
+            mWakeLock?.release()
+            mWakeLock = null
+
+            mWifiLock?.release()
+            mWifiLock = null
+
+            Logger.logDebug(LOG_TAG, "WakeLocks released successfully")
         }
 
-        Logger.logDebug(LOG_TAG, "Releasing WakeLocks")
-
-        mWakeLock?.release()
-        mWakeLock = null
-
-        mWifiLock?.release()
-        mWifiLock = null
+        // The choice of the user and the notification are updated even when no lock was held: the
+        // user may switch the wake locks off from the settings while no lock is currently acquired and
+        // that still has to be remembered, and the service may have been started by that switch just
+        // to release locks it never took, in which case it is allowed to stop itself again.
+        if (persistUserChoice) {
+            appPreferences?.setWakeLockEnabled(false)
+        }
 
         if (updateNotification) updateNotification()
-        Logger.logDebug(LOG_TAG, "WakeLocks released successfully")
     }
 
     /**
@@ -403,6 +562,12 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
                 TermuxPluginUtils.processPluginExecutionCommandError(this, LOG_TAG, executionCommand, false)
             }
         }
+
+        // Both execution paths above remove the command from the pending list once it is running, so
+        // anything still in it here belongs to a command that failed before it started and will never
+        // deliver a result. Such an entry must not stay behind, since the service is not allowed to
+        // stop itself while the pending list is not empty.
+        mShellManager.mPendingPluginExecutionCommands.remove(executionCommand)
     }
 
     /** Execute a shell command in background TermuxTask. */
@@ -559,7 +724,14 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
         return createTermuxSession(executionCommand)
     }
 
-    /** Create a [TermuxSession]. */
+    /**
+     * Create a [TermuxSession].
+     * Currently called by [TermuxTerminalSessionActivityClient.addNewSession] to add a new [TermuxSession]
+     * and by [TermuxSessionSnapshotMapper.applyTo] to re-create sessions from a persisted snapshot.
+     * This is the entry point to use for that, since it does all the setup without ever launching an
+     * activity - activity launching only happens in [executeTermuxSessionCommand] via
+     * [handleSessionAction], which is plugin intent specific.
+     */
     @Synchronized
     fun createTermuxSession(executionCommand: ExecutionCommand?): TermuxSession? {
         if (executionCommand == null) return null
@@ -596,6 +768,8 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
 
         mShellManager.mTermuxSessions.add(newTermuxSession)
 
+        snapshotSessions()
+
         // Remove the execution command from the pending plugin execution commands list
         if (executionCommand.isPluginExecutionCommand) {
             mShellManager.mPendingPluginExecutionCommands.remove(executionCommand)
@@ -605,6 +779,7 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
         mTermuxTerminalSessionActivityClient?.termuxSessionListNotifyUpdated()
 
         updateNotification()
+        if (termuxSessionsSize == 1) updateReliabilityWarningAsync()
 
         // No need to recreate the activity since it likely just started and theme should already have applied
         TermuxActivity.updateTermuxActivityStyling(this, false)
@@ -615,6 +790,20 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
     private fun ensureSshAgentRunning() {
         if (!mWantsToStop) {
             TermuxSshAgent.ensureRunningAsync(!mProperties.isSshAgentDisabled())
+        }
+    }
+
+    private fun updateReliabilityWarningAsync() {
+        try {
+            Thread {
+                try {
+                    ReliabilityWarningNotifier.update(this)
+                } catch (e: Exception) {
+                    Logger.logError(LOG_TAG, "Failed to update reliability warning: ${e.message}")
+                }
+            }.start()
+        } catch (e: Exception) {
+            Logger.logError(LOG_TAG, "Failed to start reliability warning update: ${e.message}")
         }
     }
 
@@ -637,8 +826,122 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
         }
 
         mShellManager.mTermuxSessions.remove(termuxSession)
+        snapshotSessions()
         mTermuxTerminalSessionActivityClient?.termuxSessionListNotifyUpdated()
         updateNotification()
+    }
+
+    /**
+     * Persist the current sessions with [TermuxSessionSnapshotCodec] so that
+     * [restoreSessionsFromSnapshot] can re-create them if the process of the service was killed while
+     * the shells of the user were still running.
+     *
+     * Does nothing unless the user enabled restoring sessions. Never throws, a snapshot that could not
+     * be stored must not break the session that triggered it.
+     */
+    @Synchronized
+    fun snapshotSessions() {
+        try {
+            val preferences = appPreferences ?: return
+            if (!preferences.isRestoreSessionsEnabled()) return
+
+            // The list is shared and session exits are delivered on the thread of the session, so it is
+            // copied before it is walked.
+            val sessions = ArrayList(mShellManager.mTermuxSessions)
+            preferences.setRestorableSessionsSnapshot(TermuxSessionSnapshotCodec.encode(TermuxSessionSnapshotMapper.from(sessions)))
+        } catch (e: Exception) {
+            Logger.logDebug(LOG_TAG, "Failed to store session snapshot: ${e.message}")
+        }
+    }
+
+    /**
+     * Re-create the sessions persisted by [snapshotSessions], if the user enabled restoring sessions
+     * and no sessions are running yet. Called at the end of [onCreate] on the main thread.
+     *
+     * The snapshot is cleared whenever restore is skipped, so that a snapshot that cannot be used,
+     * either because the user opted out or because it is malformed, is not retried on every start.
+     */
+    @Synchronized
+    private fun restoreSessionsFromSnapshot() {
+        // Must be set before anything else, otherwise updateNotification() may stop the service again
+        // while the first restored session is still being created.
+        mRestorePending = true
+        try {
+            val preferences = appPreferences
+            if (preferences == null) {
+                Logger.logWarn(LOG_TAG, "Failed to restore sessions - preferences could not be built")
+                return
+            }
+
+            if (!preferences.isRestoreSessionsEnabled()) {
+                Logger.logDebug(LOG_TAG, "Ignoring session snapshot restore since restoring sessions is disabled")
+                preferences.setRestorableSessionsSnapshot(null)
+                return
+            }
+
+            if (mShellManager.mTermuxSessions.isNotEmpty()) {
+                Logger.logDebug(LOG_TAG, "Ignoring session snapshot restore since ${mShellManager.mTermuxSessions.size} sessions are already running")
+                preferences.setRestorableSessionsSnapshot(null)
+                return
+            }
+
+            when (val decodeResult = TermuxSessionSnapshotCodec.decode(preferences.getRestorableSessionsSnapshot())) {
+                is TermuxSessionSnapshotCodec.DecodeResult.Failed -> {
+                    Logger.logWarn(LOG_TAG, "Clearing session snapshot since it could not be decoded: ${decodeResult.reason}")
+                    preferences.setRestorableSessionsSnapshot(null)
+                }
+                is TermuxSessionSnapshotCodec.DecodeResult.Success -> {
+                    // A snapshot that decodes may still be unusable, e.g. an executable that no longer
+                    // exists. It must not crash onCreate(), since that would loop the service through
+                    // a crash on every start, so the snapshot is dropped instead.
+                    try {
+                        val restoredSessions = TermuxSessionSnapshotMapper.applyTo(this, decodeResult.sessions)
+                        Logger.logInfo(LOG_TAG, "Restored $restoredSessions sessions from session snapshot")
+                    } catch (e: Exception) {
+                        Logger.logError(LOG_TAG, "Failed to restore sessions from session snapshot: ${e.message}")
+                        preferences.setRestorableSessionsSnapshot(null)
+                    }
+                }
+            }
+        } finally {
+            mRestorePending = false
+        }
+    }
+
+    /** Clear the persisted session snapshot so that no sessions are restored on the next service start. */
+    private fun clearRestorableSessionsSnapshot() {
+        appPreferences?.setRestorableSessionsSnapshot(null)
+    }
+
+    /**
+     * Adopt the [TermuxSession] list of [TermuxShellManager] that an earlier instance of this service
+     * left running when it was destroyed without a user exit, see [onDestroy].
+     *
+     * Every session keeps the [TermuxSession.TermuxSessionClient] and the terminal session client of
+     * the instance that created it. Without adopting them, their callbacks would keep going to that
+     * destroyed instance: it would remove them from the shared [TermuxShellManager] list but this
+     * instance would never learn that a session exited, so it would neither update its notification
+     * nor ever stop itself once the last session was gone.
+     *
+     * The terminal session client is reset to [mTermuxTerminalSessionServiceClient] since no activity
+     * client can exist this early in [onCreate]. TermuxActivity re-points the sessions to its own
+     * client via [setTermuxTerminalSessionClient] when it binds to this service.
+     */
+    @Synchronized
+    private fun adoptSessionsOfPreviousServiceInstance() {
+        if (mShellManager.mTermuxSessions.isEmpty()) return
+
+        // The list is shared with the sessions, whose exit callbacks run on the thread of the session
+        // and may still be delivered to the instance that is being replaced, so it is copied here.
+        val sessions = ArrayList(mShellManager.mTermuxSessions)
+        if (sessions.isEmpty()) return
+
+        Logger.logDebug(LOG_TAG, "Adopting ${sessions.size} sessions left running by an earlier instance of the service")
+
+        for (termuxSession in sessions) {
+            termuxSession.reassignTermuxSessionClient(this)
+            termuxSession.terminalSession.updateTerminalSessionClient(mTermuxTerminalSessionServiceClient)
+        }
     }
 
     private fun processShellCreateMode(executionCommand: ExecutionCommand): ShellCreateMode? {
@@ -801,7 +1104,20 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
     @SuppressLint("MissingPermission")
     @Synchronized
     private fun updateNotification() {
-        if (mWakeLock == null && mShellManager.mTermuxSessions.isEmpty() && mShellManager.mTermuxTasks.isEmpty()) {
+        // The user asked Termux to exit. The notification was removed while the service started stopping
+        // and nothing may put it back on screen while the sessions are being killed.
+        if (mWantsToStop) return
+
+        if (TermuxServiceStopPolicy.shouldStopService(
+                wakeLockWanted = appPreferences?.isWakeLockEnabled() == true,
+                wakeLockHeld = mWakeLock != null,
+                hasSessions = mShellManager.mTermuxSessions.isNotEmpty(),
+                hasTasks = mShellManager.mTermuxTasks.isNotEmpty(),
+                hasPendingPluginCommands = mShellManager.mPendingPluginExecutionCommands.isNotEmpty(),
+                restorationPending = mRestorePending,
+                tearingDown = mTearingDown
+            )
+        ) {
             requestStopService()
         } else {
             if (PermissionUtils.checkNotificationPermission(this)) {

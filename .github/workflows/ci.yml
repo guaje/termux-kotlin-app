@@ -510,23 +510,12 @@ jobs:
           disk-size: 8G
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           disable-animations: true
+          # This action executes the input below one line at a time, each line in its own shell, so
+          # a multi line shell construct here is split apart and dies with "Syntax error: end of file
+          # unexpected (expecting fi)" before a single test runs. Everything that needs more than one
+          # line lives in scripts/run-emulator-smoke-test.sh.
           script: |
-            # The AVD is x86_64; do not depend on artifact enumeration order.
-            APK_PATH=$(find ./apks -name "*x86_64.apk" -print -quit)
-            if [ -z "$APK_PATH" ]; then
-              APK_PATH=$(find ./apks -name "*universal.apk" -print -quit)
-            fi
-
-            if [ -z "$APK_PATH" ]; then
-              echo "No x86_64 or universal APK found!"
-              exit 1
-            fi
-            
-            echo "Using APK: $APK_PATH"
-            export APK_PATH
-            
-            # Run smoke tests
-            ./scripts/emulator-smoke-test.sh
+            ./scripts/run-emulator-smoke-test.sh
 
       - name: Upload test results
         uses: actions/upload-artifact@v6

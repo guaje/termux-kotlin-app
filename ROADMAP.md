@@ -209,7 +209,9 @@ Surpass Termux in reliability and usability with comprehensive package managemen
 
 - **Memory-efficient terminal buffer**
 - **Background task optimization**
-- **Crash recovery and session restoration**
+- **Crash recovery and session restoration** — ✅ Implemented on an opt-in basis; eligible sessions are restarted, not resumed.
+- **Battery optimization awareness** — ✅ Implemented on an opt-in basis with exemption controls and dismissible warnings.
+- **Phantom-process limit awareness** — ✅ Implemented with device-wide limit status, warnings, and recovery guidance.
 - **Battery usage optimization**
 - **Startup time improvements**
 

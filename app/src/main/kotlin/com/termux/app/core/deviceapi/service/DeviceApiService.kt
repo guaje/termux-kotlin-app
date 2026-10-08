@@ -25,6 +25,7 @@ import com.termux.app.core.deviceapi.models.DeviceApiMessage
 import com.termux.app.core.logging.TaggedLogger
 import com.termux.app.core.logging.TermuxLogger
 import com.termux.app.di.ApplicationScope
+import com.termux.shared.termux.TermuxConstants
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -54,7 +55,7 @@ class DeviceApiService : Service() {
 
     companion object {
         private const val NOTIFICATION_CHANNEL_ID = "termux_device_api"
-        private const val NOTIFICATION_ID = 1337
+        private const val NOTIFICATION_ID = TermuxConstants.TERMUX_DEVICE_API_SERVICE_NOTIFICATION_ID
         const val ACTION_STOP_SERVICE = "com.termux.STOP_DEVICE_API_SERVICE"
 
         fun createIntent(context: Context): Intent =

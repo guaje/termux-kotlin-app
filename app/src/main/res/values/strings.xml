@@ -102,6 +102,14 @@
     <string name="notification_action_wake_lock">Acquire wakelock</string>
     <string name="notification_action_wake_unlock">Release wakelock</string>
 
+    <!-- Background Reliability Notification -->
+    <string name="termux_reliability_notification_title">Background reliability needs attention</string>
+    <string name="termux_reliability_notification_battery_text">Battery optimization is enabled; sessions may be stopped while the screen is off.</string>
+    <string name="termux_reliability_notification_phantom_text">The device-wide phantom-process limit may stop sessions while the screen is off.</string>
+    <string name="termux_reliability_notification_both_text">Battery optimization and the device-wide process limit may stop sessions while the screen is off.</string>
+    <string name="termux_reliability_notification_action">Request exemption</string>
+    <string name="termux_reliability_notification_action_open_settings">Open settings</string>
+
 
 
     <!-- TermuxService -->
@@ -142,6 +150,53 @@
     <!-- Termux App Preferences -->
     <string name="termux_preferences_title">&TERMUX_APP_NAME;</string>
     <string name="termux_preferences_summary">Preferences for &TERMUX_APP_NAME; app</string>
+
+    <!-- Background Reliability Preferences -->
+    <string name="termux_reliability_preferences_title">Background reliability</string>
+    <string name="termux_reliability_preferences_summary">Keep sessions available and review Android background limits</string>
+
+    <!-- Service Category -->
+    <string name="termux_reliability_service_header">Service</string>
+
+    <!-- Wake Lock -->
+    <string name="termux_reliability_wake_lock_enabled_title">Remember wake lock</string>
+    <string name="termux_reliability_wake_lock_enabled_off">Do not reacquire wake and Wi-Fi locks after the service restarts. (Default)</string>
+    <string name="termux_reliability_wake_lock_enabled_on">Reacquire wake and Wi-Fi locks after the service restarts. This can increase battery use.</string>
+
+    <!-- Restore Sessions -->
+    <string name="termux_reliability_restore_sessions_enabled_title">Restart sessions after app process death</string>
+    <string name="termux_reliability_restore_sessions_enabled_off">Do not restart terminal sessions after app process death. (Default)</string>
+    <string name="termux_reliability_restore_sessions_enabled_on">Sessions are restarted, not resumed: scrollback and running programs are lost, and shell startup files run again.</string>
+
+    <!-- Warnings Category -->
+    <string name="termux_reliability_warnings_header">Warnings</string>
+
+    <!-- Battery Optimization Warning -->
+    <string name="termux_reliability_battery_optimization_warning_enabled_title">Battery optimization warning</string>
+    <string name="termux_reliability_battery_optimization_warning_enabled_off">Do not warn when battery optimization can stop background sessions.</string>
+    <string name="termux_reliability_battery_optimization_warning_enabled_on">Warn when battery optimization can stop background sessions. (Default)</string>
+
+    <!-- Battery Optimization State -->
+    <string name="termux_reliability_battery_optimization_state_title">Battery optimization exemption</string>
+    <string name="termux_reliability_battery_optimization_state_exempted">Exempted from battery optimization.</string>
+    <string name="termux_reliability_battery_optimization_state_not_exempted">Not exempted from battery optimization.</string>
+    <string name="termux_reliability_battery_optimization_state_tap_to_change">Tap to change this setting.</string>
+    <string name="termux_reliability_battery_optimization_request_failed_fallback">Could not open battery optimization settings. The ADB fallback command was copied to the clipboard.</string>
+
+    <!-- Phantom Process Warning -->
+    <string name="termux_reliability_phantom_process_warning_enabled_title">Phantom-process warning</string>
+    <string name="termux_reliability_phantom_process_warning_enabled_off">Do not warn about a low or nearly reached device-wide phantom-process limit.</string>
+    <string name="termux_reliability_phantom_process_warning_enabled_on">Warn about a low or nearly reached device-wide phantom-process limit. (Default)</string>
+
+    <!-- Phantom Process State -->
+    <string name="termux_reliability_phantom_processes_state_title">Phantom-process limit</string>
+    <string name="termux_reliability_phantom_processes_state_value">Device-wide limit: %1$d. Termux process count: %2$d. Tap to copy the recommended ADB command.</string>
+    <string name="termux_reliability_phantom_processes_state_unknown">The device-wide limit or Termux process count is unavailable. Tap to copy the recommended ADB command.</string>
+
+    <!-- Recovery Commands -->
+    <string name="termux_reliability_battery_optimization_adb_command" translatable="false">adb shell dumpsys deviceidle whitelist +%1$s</string>
+    <string name="termux_reliability_phantom_process_adb_command" translatable="false">adb shell settings put global max_phantom_processes 32768</string>
+    <string name="termux_reliability_copied_to_clipboard">Copied to clipboard</string>
 
         <!-- Debugging Preferences -->
         <string name="termux_debugging_preferences_title">Debugging</string>

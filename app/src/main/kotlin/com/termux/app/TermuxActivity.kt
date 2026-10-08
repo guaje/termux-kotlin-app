@@ -298,6 +298,9 @@ class TermuxActivity : AppCompatActivity(), ServiceConnection {
         val intent = intent
         setIntent(null)
 
+        // Start a session if none exists yet. Sessions restored from the session snapshot are already
+        // in the list here, because TermuxService.onCreate() restores them before this callback runs, so
+        // a restore and this fallback can never both create a session for the same start.
         if (termuxService.isTermuxSessionsEmpty) {
             if (mIsVisible) {
                 TermuxInstaller.setupBootstrapIfNeeded(this@TermuxActivity) {

@@ -27,9 +27,24 @@ import java.util.Collections
 class TermuxSession private constructor(
     private val mTerminalSession: TerminalSession,
     private val mExecutionCommand: ExecutionCommand,
-    private val mTermuxSessionClient: TermuxSessionClient?,
+    private var mTermuxSessionClient: TermuxSessionClient?,
     private val mSetStdoutOnExit: Boolean
 ) {
+
+    /**
+     * Reassign the [TermuxSessionClient] that receives [TermuxSessionClient.onTermuxSessionExited] for
+     * this session.
+     *
+     * This is required when the component that created this session was destroyed while the session
+     * was deliberately left running. Without reassigning the client, the callbacks of the session
+     * would keep going to the destroyed component, which is no longer able to react to the session
+     * exiting.
+     *
+     * @param termuxSessionClient The new [TermuxSessionClient] for this session.
+     */
+    fun reassignTermuxSessionClient(termuxSessionClient: TermuxSessionClient?) {
+        mTermuxSessionClient = termuxSessionClient
+    }
 
     /**
      * Signal that this [TermuxSession] has finished.  This should be called when
@@ -280,8 +295,9 @@ class TermuxSession private constructor(
 
             Logger.logDebug(LOG_TAG, "Processing \"${execCmd.getCommandIdAndLabelLogString()}\" TermuxSession result")
 
-            if (termuxSession != null && termuxSession.mTermuxSessionClient != null) {
-                termuxSession.mTermuxSessionClient.onTermuxSessionExited(termuxSession)
+            val termuxSessionClient = termuxSession?.mTermuxSessionClient
+            if (termuxSession != null && termuxSessionClient != null) {
+                termuxSessionClient.onTermuxSessionExited(termuxSession)
             } else {
                 // If a callback is not set and execution command didn't fail, then we set success state now
                 // Otherwise, the callback host can set it himself when its done with the termuxSession

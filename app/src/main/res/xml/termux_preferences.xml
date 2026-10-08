@@ -6,6 +6,11 @@
         app:fragment="com.termux.app.fragments.settings.termux.DebuggingPreferencesFragment"/>
 
     <Preference
+        app:title="@string/termux_reliability_preferences_title"
+        app:summary="@string/termux_reliability_preferences_summary"
+        app:fragment="com.termux.app.fragments.settings.termux.ReliabilityPreferencesFragment"/>
+
+    <Preference
         app:title="@string/termux_terminal_io_preferences_title"
         app:summary="@string/termux_terminal_io_preferences_summary"
         app:fragment="com.termux.app.fragments.settings.termux.TerminalIOPreferencesFragment"/>

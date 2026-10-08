@@ -280,6 +280,8 @@ class TermuxTerminalSessionActivityClient(private val mActivity: TermuxActivity)
             val termuxSession = service.getTermuxSessionForTerminalSession(sessionToRename)
             if (termuxSession != null)
                 termuxSession.executionCommand.shellName = text
+            // The renamed session names are part of the session snapshot, so store it again
+            service.snapshotSessions()
         }
     }
 
@@ -427,7 +429,8 @@ class TermuxTerminalSessionActivityClient(private val mActivity: TermuxActivity)
     }
 
     companion object {
-        private const val MAX_SESSIONS = 8
+        /** The maximum number of [TermuxSession] instances that may run at the same time. */
+        internal const val MAX_SESSIONS = 8
         private const val LOG_TAG = "TermuxTerminalSessionActivityClient"
     }
 }

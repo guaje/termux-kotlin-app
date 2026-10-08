@@ -50,9 +50,15 @@
 
 ### Changes
 - Bundle OpenSSH for fresh offline installs and supervise a fixed shared ssh-agent socket across terminal and tmux sessions.
+- Add an opt-in Background reliability settings screen, battery-optimization and phantom-process warnings, and recovery documentation.
+- The terminal service is now restarted by Android when its process is killed, takes over the sessions that are still alive and stops itself once nothing is running any more.
 
 ### Fixes
 - Stopping the built-in ssh-agent no longer crashes the app with an interrupted read on its output thread.
+- Terminal sessions are no longer killed with `SIGKILL` when the service is destroyed without an explicit exit by the user, which is what happened on devices that stop background apps while the screen is off.
+- Remember wake locks across service restarts and optionally restart eligible sessions after app process death.
+- The agent, device api and boot script services no longer reuse the notification ids of the terminal and run-command notifications, and `RunCommandService` now stops itself after its command finished.
+- The working directory string of a terminal session is released against the right JNI string in `terminal-emulator`.
 
 ---
 

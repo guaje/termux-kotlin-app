@@ -340,23 +340,53 @@ EOF
     log_info "Summary written to: $SUMMARY_FILE"
 }
 
+# Run a command with a wall clock limit, so that a dead or half alive emulator cannot block anything.
+run_bounded() {
+    local limit_seconds="$1"
+    shift
+
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$limit_seconds" "$@"
+    else
+        "$@"
+    fi
+}
+
 # Collect Android emulator logs
 collect_emulator_logs() {
     log_info "Collecting emulator logs..."
-    
-    if command -v adb >/dev/null 2>&1; then
+
+    if ! command -v adb >/dev/null 2>&1; then
+        return 0
+    fi
+
+    # A failed emulator run leaves adb with no transport at all, with a transport that never comes
+    # up, or with a server that has to be started first. None of the calls below may wait for that:
+    # this step runs after the job already failed, and an adb call that blocks here hides the real
+    # error until the whole job runs into its timeout, which cost an hour on every emulator failure.
+    if ! run_bounded 15 adb get-state >/dev/null 2>&1; then
+        log_warn "No emulator in a usable state, collecting the device list only"
         {
             echo "=== ADB Devices ==="
-            adb devices 2>&1 || echo "ADB not available"
+            run_bounded 15 adb devices 2>&1 || echo "ADB returned no device list"
             echo ""
-            echo "=== Logcat (last 200 lines) ==="
-            adb logcat -d "*:W" 2>&1 | tail -200 || echo "No logcat available"
+            echo "=== Logcat skipped: no emulator responded within 15 seconds ==="
             echo ""
         } >> "$LOG_FILE"
-        
-        # Save full logcat separately
-        adb logcat -d > "$FAILURE_DIR/logcat.txt" 2>/dev/null || true
+        return 0
     fi
+
+    {
+        echo "=== ADB Devices ==="
+        run_bounded 15 adb devices 2>&1 || echo "ADB not available"
+        echo ""
+        echo "=== Logcat (last 200 lines) ==="
+        run_bounded 60 adb logcat -d "*:W" 2>&1 | tail -200 || echo "No logcat available"
+        echo ""
+    } >> "$LOG_FILE"
+
+    # Save full logcat separately
+    run_bounded 60 adb logcat -d > "$FAILURE_DIR/logcat.txt" 2>/dev/null || true
 }
 
 # Collect Docker logs

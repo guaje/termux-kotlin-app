@@ -1,0 +1,49 @@
+<PreferenceScreen xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <PreferenceCategory
+        app:key="service"
+        app:title="@string/termux_reliability_service_header">
+
+        <SwitchPreferenceCompat
+            app:key="wake_lock_enabled"
+            app:summaryOff="@string/termux_reliability_wake_lock_enabled_off"
+            app:summaryOn="@string/termux_reliability_wake_lock_enabled_on"
+            app:title="@string/termux_reliability_wake_lock_enabled_title" />
+
+        <SwitchPreferenceCompat
+            app:key="restore_sessions_enabled"
+            app:summaryOff="@string/termux_reliability_restore_sessions_enabled_off"
+            app:summaryOn="@string/termux_reliability_restore_sessions_enabled_on"
+            app:title="@string/termux_reliability_restore_sessions_enabled_title" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        app:key="warnings"
+        app:title="@string/termux_reliability_warnings_header">
+
+        <SwitchPreferenceCompat
+            app:key="battery_optimization_warning_enabled"
+            app:summaryOff="@string/termux_reliability_battery_optimization_warning_enabled_off"
+            app:summaryOn="@string/termux_reliability_battery_optimization_warning_enabled_on"
+            app:title="@string/termux_reliability_battery_optimization_warning_enabled_title" />
+
+        <Preference
+            app:key="battery_optimization_state"
+            app:persistent="false"
+            app:title="@string/termux_reliability_battery_optimization_state_title" />
+
+        <SwitchPreferenceCompat
+            app:key="phantom_process_warning_enabled"
+            app:summaryOff="@string/termux_reliability_phantom_process_warning_enabled_off"
+            app:summaryOn="@string/termux_reliability_phantom_process_warning_enabled_on"
+            app:title="@string/termux_reliability_phantom_process_warning_enabled_title" />
+
+        <Preference
+            app:key="phantom_processes_state"
+            app:persistent="false"
+            app:title="@string/termux_reliability_phantom_processes_state_title" />
+
+    </PreferenceCategory>
+
+</PreferenceScreen>
