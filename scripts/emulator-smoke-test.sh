@@ -38,6 +38,21 @@ SSH_TEST_KEY_COMMENT="termux-smoke-test-key"
 # same budget: 60 attempts x 2 seconds.
 SSH_AGENT_WAIT_ATTEMPTS="${SSH_AGENT_WAIT_ATTEMPTS:-60}"
 
+# The environment of a terminal session of the app, as far as these tests need it. PREFIX, HOME, TMPDIR
+# and LD_LIBRARY_PATH are the values TermuxShellEnvironment hands to a session. The directories of the
+# system are appended after the bin directory of the prefix, because the harness itself uses grep, stat
+# and cat and a small bootstrap may not contain them. A bare "adb shell run-as" inherits the environment
+# of adbd instead, where PREFIX does not exist and PATH holds only the system directories, so every
+# program installed below PREFIX is unreachable there and only absolute paths work. The shell is
+# deliberately started without -l: sourcing the profile of the user would let a broken ~/.profile fail
+# this harness for a reason that is not the product, and what the app writes to termux.env is asserted
+# directly by a test of its own.
+TERMUX_SHELL_ENV="env PREFIX=$PREFIX HOME=${PREFIX%/usr}/home TMPDIR=$PREFIX/tmp LD_LIBRARY_PATH=$PREFIX/lib PATH=$PREFIX/bin:/system/bin:/system/xbin"
+
+# The status the device side command reports about itself, read back out of its output. adb does not
+# propagate the status of a nested run-as shell, see run_termux_command.
+COMMAND_STATUS_MARKER="__TERMUX_SMOKE_TEST_RC="
+
 # Test results
 TESTS_PASSED=0
 TESTS_FAILED=0
@@ -230,24 +245,42 @@ wait_for_bootstrap() {
     return 0
 }
 
-# Run a command in the Termux environment
+# Run a command in the Termux environment and judge it by the status the command itself reported.
+#
+# Two things make this harder than it looks and both were wrong here before:
+#
+# - The command needs the environment of a real terminal session, otherwise a program of the prefix
+#   is simply not found and the test measures the PATH of adbd instead of the app.
+# - The status has to come from the device side. adb does not propagate the status of a nested
+#   run-as shell, so reading the status of the adb call always produced 0, which made every command
+#   with empty output a failure and every genuinely failing command a success. The command therefore
+#   prints its own status behind COMMAND_STATUS_MARKER, and empty output is allowed: it is a normal
+#   result of a successful command.
+#
+# The command must not contain single quotes, since it is passed inside them.
 run_termux_command() {
     local cmd="$1"
     local description="$2"
-    local timeout="${3:-30}"
-    
+
     log_test "Running: $description"
     log_info "Command: $cmd"
-    
-    # Run command via run-as
+
     local result
-    result=$(adb shell "run-as $PACKAGE_NAME /data/data/$PACKAGE_NAME/files/usr/bin/bash -c '$cmd'" 2>&1) || true
-    
-    local exit_code=$?
-    
+    result=$(adb shell "run-as $PACKAGE_NAME $TERMUX_SHELL_ENV $PREFIX/bin/bash -c '$cmd; echo $COMMAND_STATUS_MARKER\$?'" 2>&1) || true
+
+    local exit_code
+    exit_code=$(printf '%s\n' "$result" | sed -n "s|.*$COMMAND_STATUS_MARKER\([0-9][0-9]*\).*|\1|p" | tail -1)
+    if [ -z "$exit_code" ]; then
+        # The status line is missing, so the command never ran to completion on the device.
+        exit_code=1
+    fi
+
+    # The status line is bookkeeping of the harness and is not part of the output.
+    result=$(printf '%s\n' "$result" | grep -v "$COMMAND_STATUS_MARKER" || true)
+
     echo "$result" >> "$TEST_LOG"
-    
-    if [ $exit_code -eq 0 ] && [ -n "$result" ]; then
+
+    if [ "$exit_code" = "0" ]; then
         log_info "Command succeeded"
         echo "$result" | head -20
         TESTS_PASSED=$((TESTS_PASSED + 1))
@@ -273,7 +306,7 @@ run_termux_check() {
     log_info "Command: $cmd"
 
     local result
-    result=$(adb shell "run-as $PACKAGE_NAME $PREFIX/bin/bash -c '$cmd'" 2>&1) || true
+    result=$(adb shell "run-as $PACKAGE_NAME $TERMUX_SHELL_ENV $PREFIX/bin/bash -c '$cmd'" 2>&1) || true
 
     echo "$result" >> "$TEST_LOG"
 
@@ -386,16 +419,24 @@ run_smoke_tests() {
     
     # Test 2: Check shell
     log_test "Test 2: Shell verification"
-    run_termux_command 'echo $SHELL' "Shell verification" || true
-    
-    # Test 3: Check PREFIX
+    run_termux_command 'echo ${SHELL:-no-SHELL-variable-in-the-environment}' "Shell verification" || true
+
+    # Test 3: The extracted prefix is the one the app installed, with its home directory beside it.
+    # Asserting an absolute path instead of the PREFIX variable matters here: the harness hands PREFIX
+    # to the command itself, so printing it back would only prove that env works.
     log_test "Test 3: PREFIX verification"
-    run_termux_command 'echo $PREFIX' "PREFIX path check" || true
-    
-    # Test 4: Check if apt/pkg exists
+    run_termux_check "if [ -x $PREFIX/bin/bash ] && [ -d ${PREFIX%/usr}/home ]; then echo PREFIX_OK; fi" \
+        "PREFIX layout of the installed app" "PREFIX_OK" || true
+
+    # Test 4: A package tool of the prefix is reachable through PATH. This product drives dpkg and its
+    # apt wrappers itself and its bootstrap does not have to contain termux-tools with pkg, so any of
+    # the three proves what this test is actually about: the bin directory of the prefix is on PATH.
     log_test "Test 4: Package manager check"
-    run_termux_command 'which pkg || which apt' "Package manager availability" || true
-    
+    run_termux_check "tool=; for c in apt pkg dpkg; do if command -v \$c >/dev/null 2>&1; then tool=\$c; break; fi; done; if [ -n \"\$tool\" ]; then echo \"package tool: \$tool\"; echo TOOL_OK; fi" \
+        "Package manager availability" "TOOL_OK" || true
+
+    # Tests 5 to 7 can only report: pkg may be absent from the bootstrap by design, so they are written
+    # to print something in every case and never decide the result of the run.
     # Test 5: pkg update (may fail in CI due to network)
     log_test "Test 5: Package update"
     run_termux_command 'pkg update -y 2>&1 || echo "Update skipped/failed"' "Package list update" || true
@@ -414,9 +455,10 @@ run_smoke_tests() {
     run_termux_check "if grep -Fqx \"export HOME=\\\"${PREFIX%/usr}/home\\\"\" $TERMUX_ENV_FILE; then echo HOME_OK; fi" \
         "termux.env exports the PREFIX-derived home directory" "HOME_OK" || true
     
-    # Test 9: List installed packages
+    # Test 9: The package database written by the offline install is readable and lists packages. An
+    # empty listing used to count as success here, because empty output was treated as a failure.
     log_test "Test 9: List packages"
-    run_termux_command 'dpkg -l 2>/dev/null | head -10 || echo "dpkg not ready"' "List installed packages" || true
+    run_termux_check "if dpkg -l 2>/dev/null | grep -q ^ii; then echo DPKG_OK; fi" "List installed packages" "DPKG_OK" || true
     
     # Test 10: Final echo
     log_test "Test 10: Final verification"
@@ -588,6 +630,12 @@ while [ $# -gt 0 ]; do
             ;;
     esac
 done
+
+# The log file lives inside the log directory, so it has to follow a --log-dir given on the command
+# line. It used to stay at the directory taken from the environment, which made --log-dir write the
+# report to one directory and the results to another, or fail outright when the directory from the
+# environment did not exist yet.
+TEST_LOG="${LOG_DIR}/test-results.log"
 
 # Main execution
 main() {
