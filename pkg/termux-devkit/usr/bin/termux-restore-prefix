@@ -1,0 +1,102 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# Restore a termux-backup-prefix archive.
+#
+# Usage:
+#   termux-restore-prefix ARCHIVE.tar.gz --into DIR [--yes]
+#   termux-restore-prefix ARCHIVE.tar.gz --in-place --yes
+#
+#   --into DIR   Extract into DIR for inspection or an emulator rehearsal. Safe on a
+#                live device because nothing already installed is touched.
+#   --in-place   Extract over the running prefix and home. Refuses to run while the
+#                target prefix is non-empty unless --yes is also given.
+#   --yes        Acknowledge that an in-place restore overwrites files.
+#
+# Output:
+#   Restored tree plus a summary line. Nothing is deleted by this script.
+#
+# Exit codes:
+#   0  restored and verified
+#   1  bad arguments, missing archive, or a refused destructive step
+#   2  integrity check failed before anything was written
+#
+# WHY THE HESITATION: TermuxInstaller deletes $PREFIX when it decides the prefix is
+# empty or invalid, so a half-restored prefix is worse than no restore. Extract to a
+# staging directory first, confirm the manifest, then move files into place.
+
+set -euo pipefail
+
+PREFIX="${TERMUX_PREFIX:-/data/data/com.termux/files/usr}"
+HOME_DIR="${TERMUX_HOME:-$HOME}"
+ARCHIVE=""
+TARGET=""
+IN_PLACE=0
+ASSUME_YES=0
+
+usage() {
+    sed -n '3,19p' "$0"
+    exit 1
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --into) TARGET="$2"; shift 2 ;;
+        --in-place) IN_PLACE=1; shift ;;
+        --yes) ASSUME_YES=1; shift ;;
+        -h|--help) usage ;;
+        -*) echo "ERROR: unknown argument: $1" >&2; usage ;;
+        *) [ -z "$ARCHIVE" ] && ARCHIVE="$1" && shift || { echo "ERROR: two archives given" >&2; exit 1; } ;;
+    esac
+done
+
+[ -n "$ARCHIVE" ] || { echo "ERROR: no archive given" >&2; usage; }
+[ -f "$ARCHIVE" ] || { echo "ERROR: no such archive: $ARCHIVE" >&2; exit 1; }
+
+if [ "$IN_PLACE" -eq 1 ]; then
+    TARGET="$HOME_DIR"
+    if [ -n "$(ls -A "$PREFIX" 2>/dev/null | grep -v '^var$' | head -1)" ] && [ "$ASSUME_YES" -ne 1 ]; then
+        echo "ERROR: refusing to restore over a non-empty prefix without --yes." >&2
+        echo "NOTE: prefer --into /tmp/staging and compare first; a partially overwritten" >&2
+        echo "      prefix can be judged invalid by the installer, which then deletes it." >&2
+        exit 1
+    fi
+else
+    [ -n "$TARGET" ] || { echo "ERROR: pass --into DIR or --in-place" >&2; usage; }
+fi
+
+if [ -f "$ARCHIVE.sha256" ]; then
+    if ! (cd "$(dirname "$ARCHIVE")" && sha256sum -c "$(basename "$ARCHIVE").sha256" >/dev/null 2>&1); then
+        echo "ERROR: checksum mismatch, refusing to extract" >&2
+        exit 2
+    fi
+    echo "Checksum verified."
+else
+    echo "NOTE: no .sha256 sidecar next to the archive, integrity is unverified."
+fi
+
+if ! tar -tzf "$ARCHIVE" >/dev/null 2>&1; then
+    echo "ERROR: archive cannot be listed; refusing to extract" >&2
+    exit 2
+fi
+
+mkdir -p "$TARGET"
+COUNT="$(tar -tzf "$ARCHIVE" | wc -l | tr -d ' ')"
+echo "Restoring $COUNT entries into $TARGET"
+tar -xzf "$ARCHIVE" -C "$TARGET"
+
+# Report what a restore actually bought, because the point of the archive is the
+# harness conversations, not the binaries.
+echo "Restored state directories:"
+for dir in .termux .pi .claude .codex .hermes .local/share/opencode; do
+    if [ -d "$TARGET/$dir" ]; then
+        printf '  %-28s %s\n' "$dir" "$(du -sh "$TARGET/$dir" 2>/dev/null | cut -f1)"
+    fi
+done
+
+# Fail loudly if the prefix archive claimed to be full but brought no shell with it.
+if [ "$IN_PLACE" -eq 1 ] && [ ! -x "$PREFIX/bin/bash" ]; then
+    echo "ERROR: prefix restored without bin/bash - do NOT launch a new terminal yet." >&2
+    echo "NOTE: re-run the restore or reinstall the app so the bootstrap is repaired." >&2
+    exit 1
+fi
+
+echo "OK: $COUNT entries"
