@@ -611,15 +611,24 @@ jobs:
             cp "$source_deb" "$repo_arch/"
           done
 
+          # The developer kit is scripts only, so building it here is nearly free and it is the
+          # reason the feed exists at all: anything that ships through `pkg upgrade` never costs
+          # an APK install, and an APK install still restarts the app process. Built for every
+          # architecture even though the payload is identical, because a flat repository has no
+          # arch-independent mechanism that apt would read (see scripts/generate-repo.sh).
+          ./scripts/build-devkit-package.sh --output "$PWD/pages/repo"
+
           GPG_KEY="" ./scripts/generate-repo.sh "$PWD/pages/repo"
 
           for arch in aarch64 arm x86_64 i686; do
             test -f "pages/repo/$arch/termux-api_1%3a0.59.1-1_${arch}.deb"
+            test -f "pages/repo/$arch/termux-devkit_0.1.0_${arch}.deb"
             test -s "pages/repo/$arch/Packages"
             test -s "pages/repo/$arch/Packages.gz"
           done
           test -s pages/repo/Release
           ./scripts/validate-repo-index.sh pages/repo
+          ./scripts/validate-devkit-repo-index.sh pages/repo
 
       - name: Write the apt source snippet
         run: |

@@ -1,0 +1,143 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# Ask the running Termux process to re-read its configuration without a restart.
+#
+# Usage:
+#   termux-reload [--scope NAME[,NAME]] [--wait SECONDS] [--quiet]
+#   termux-reload --status
+#
+#   --scope NAME   Repeatable/CSV list of scopes to reload: properties, keymaps,
+#                  devkit, plugins. Default: properties,keymaps.
+#   --wait SECS    How long to wait for the app's status file. Default: 5.
+#   --status       Print the state a reload would act on, without touching the app.
+#   --quiet        Only print the final line.
+#
+# Output:
+#   One line per scope (applied / skipped with the reason) and the reload generation.
+#
+# Exit codes:
+#   0  every requested scope was applied
+#   1  the request could not be delivered (no socket, no am client, no receiver)
+#   2  delivered but the app reported a failure for at least one scope
+#   3  delivered but no status file appeared before the timeout
+#
+# TRANSPORT: the app listens on an abstract-free unix socket inside its own data
+# directory and executes submitted `am` requests in its own process, so a request
+# from a shell in this prefix reaches a receiver that a foreign uid is refused.
+# No curl, nc or socat is required - those are not in the bootstrap.
+
+set -euo pipefail
+
+PREFIX="${TERMUX_PREFIX:-/data/data/com.termux/files/usr}"
+HOME_DIR="${TERMUX_HOME:-$HOME}"
+PACKAGE="${TERMUX_PACKAGE_NAME:-com.termux}"
+SOCKET="${TERMUX_APP__AM_SOCKET_FILE_PATH:-${TERMUX_AM_SOCKET_FILE_PATH:-/data/data/$PACKAGE/files/apps/$PACKAGE/termux-am/am.sock}}"
+STATUS_FILE="${TERMUX_DEVKIT_STATUS_FILE:-$PREFIX/var/lib/termux-kotlin/devkit/last-reload.json}"
+ACTION="$PACKAGE.app.devkit.reload"
+SCOPES="properties,keymaps"
+WAIT_SECONDS=5
+STATUS_ONLY=0
+QUIET=0
+
+usage() {
+    sed -n '3,20p' "$0"
+    exit 1
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --scope) SCOPES="$SCOPES,$2"; shift 2 ;;
+        --wait) WAIT_SECONDS="$2"; shift 2 ;;
+        --status) STATUS_ONLY=1; shift ;;
+        --quiet) QUIET=1; shift ;;
+        -h|--help) usage ;;
+        *) echo "ERROR: unknown argument: $1" >&2; usage ;;
+    esac
+done
+
+SCOPES="$(printf '%s' "$SCOPES" | sed 's/,,*/+/g; s/^+//; s/+$//; s/+/ /g; s/,/ /g' | tr ' ' '\n' | sort -u | tr '\n' ' ')"
+
+log() { [ "$QUIET" -eq 1 ] || echo "$@"; }
+
+print_status() {
+    echo "am socket : $([ -S "$SOCKET" ] && echo present || echo absent)  $SOCKET"
+    echo "am client : $(command -v termux-am >/dev/null 2>&1 && command -v termux-am || echo 'not installed (pkg install termux-am)')"
+    echo "status    : $([ -f "$STATUS_FILE" ] && echo present || echo absent)  $STATUS_FILE"
+    if [ -n "${TERMUX_APP__PID:-}" ]; then
+        echo "app pid   : $TERMUX_APP__PID"
+    else
+        echo "app pid   : $(pidof "$PACKAGE" 2>/dev/null || echo 'not running')"
+    fi
+    echo "properties: $([ -f "$HOME_DIR/.termux/termux.properties" ] \
+        && stat -c '%y' "$HOME_DIR/.termux/termux.properties" 2>/dev/null || echo 'no file')"
+    if command -v tmux >/dev/null 2>&1; then
+        echo "tmux      : $(tmux ls 2>/dev/null | tr '\n' ';' || echo 'no server')"
+    fi
+    for cli in pi agy claude codex opencode hermes; do
+        # An `a && b` list whose left side fails aborts the script under `set -e`,
+        # so probe with `if` instead.
+        if command -v "$cli" >/dev/null 2>&1; then
+            printf 'harness   : %s %s\n' "$cli" "$($cli --version 2>&1 | head -1)"
+        fi
+    done
+}
+
+if [ "$STATUS_ONLY" -eq 1 ]; then
+    print_status
+    exit 0
+fi
+
+if [ ! -S "$SOCKET" ]; then
+    echo "ERROR: no am socket at $SOCKET." >&2
+    echo "NOTE: start a terminal session first; the socket is created by the app process." >&2
+    exit 1
+fi
+
+AM="$(command -v termux-am 2>/dev/null || true)"
+if [ -z "$AM" ]; then
+    echo "ERROR: termux-am is not installed, so this client cannot reach the socket." >&2
+    echo "NOTE: pkg install termux-am" >&2
+    exit 1
+fi
+
+REQUEST_ID="reload-$$-$(date +%s)"
+log "request $REQUEST_ID scopes: $SCOPES"
+
+# The app executes this broadcast in its own process, which is why it is delivered to
+# a receiver that the platform refuses to deliver to `adb shell`.
+OUTPUT="$("$AM" broadcast -a "$ACTION" \
+    --es "$PACKAGE.app.devkit.request_id" "$REQUEST_ID" \
+    --es "$PACKAGE.app.devkit.scopes" "$(echo "$SCOPES" | tr ' ' ',')" 2>&1 || true)"
+
+case "$OUTPUT" in
+    *"result=-1"*) : ;;  # delivered
+    *)
+        echo "ERROR: the app did not accept the reload broadcast." >&2
+        echo "NOTE: $OUTPUT" >&2
+        echo "NOTE: this needs a `dev` build with DEVKIT_HOST enabled and the devkit receiver present." >&2
+        exit 1
+        ;;
+esac
+
+REMAINING="$WAIT_SECONDS"
+while [ "$REMAINING" -gt 0 ]; do
+    if [ -f "$STATUS_FILE" ] && grep -q "\"requestId\": *\"$REQUEST_ID\"" "$STATUS_FILE" 2>/dev/null; then
+        break
+    fi
+    sleep 1
+    REMAINING=$((REMAINING - 1))
+done
+
+if [ ! -f "$STATUS_FILE" ] || ! grep -q "$REQUEST_ID" "$STATUS_FILE" 2>/dev/null; then
+    echo "ERROR: no status file after ${WAIT_SECONDS}s at $STATUS_FILE" >&2
+    echo "NOTE: the app received the broadcast but has not implemented the devkit reload handler." >&2
+    exit 3
+fi
+
+cat "$STATUS_FILE"
+
+# Exit non-zero when the app reported any scope as failed, so a caller can trust the
+# command instead of reading JSON.
+if grep -q '"failed"' "$STATUS_FILE" 2>/dev/null && ! grep -q '"failed": *\[\]' "$STATUS_FILE" 2>/dev/null; then
+    exit 2
+fi
+exit 0

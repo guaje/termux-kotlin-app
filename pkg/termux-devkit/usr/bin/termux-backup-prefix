@@ -1,0 +1,134 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# Back up the Termux prefix, home configuration and session state to shared storage.
+#
+# Usage:
+#   termux-backup-prefix [--quick] [--output DIR] [--label NAME]
+#
+#   --quick        Only archive the state a reinstalled app needs to resume work
+#                  (termux.properties, shell init files, and every known agent
+#                  session directory). Skips $PREFIX itself. Takes seconds.
+#   --output DIR   Destination directory. Default: $EXTERNAL_STORAGE/Download/termux-backups
+#   --label NAME   Suffix for the archive name so a restore rehearsal is recognisable.
+#
+# Output:
+#   termux-backup_<timestamp>[_label].tar.gz plus a .sha256 sidecar and a manifest.
+#
+# Exit codes:
+#   0  archive written and verified
+#   1  a source directory was missing or the archive could not be written
+#   2  the archive was written but the integrity check failed
+#
+# NOTE: an archive that has never been restored is not a backup. Restore it on an
+# emulator once (docs/DEV_INSTALL.md) before trusting it with an uninstall.
+
+set -euo pipefail
+
+PREFIX="${TERMUX_PREFIX:-/data/data/com.termux/files/usr}"
+HOME_DIR="${TERMUX_HOME:-$HOME}"
+EXTERNAL_DIR="${TERMUX_EXTERNAL_STORAGE:-${EXTERNAL_STORAGE:-/storage/emulated/0}}"
+OUTPUT_DIR="${TERMUX_BACKUP_DIR:-$EXTERNAL_DIR/Download/termux-backups}"
+QUICK=0
+LABEL=""
+TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+
+# Session state that survives an app replace but is worth archiving anyway, because
+# a version-code mismatch forces an uninstall and an uninstall deletes all of it.
+STATE_DIRS=".termux .pi .claude .codex .gemini .hermes .config/opencode .local/share/opencode"
+QUICK_DIRS=".termux .pi .claude .codex .hermes .local/share/opencode"
+EXCLUDES="--exclude=var/tmp --exclude=tmp --exclude=.cache --exclude=var/cache/apt/archives"
+
+usage() {
+    sed -n '3,20p' "$0"
+    exit 1
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --quick) QUICK=1; shift ;;
+        --output) OUTPUT_DIR="$2"; shift 2 ;;
+        --label) LABEL="$2"; shift 2 ;;
+        -h|--help) usage ;;
+        *) echo "ERROR: unknown argument: $1" >&2; usage ;;
+    esac
+done
+
+if [ -n "$LABEL" ] && ! printf '%s' "$LABEL" | grep -qE '^[A-Za-z0-9._-]+$'; then
+    echo "ERROR: label must be [A-Za-z0-9._-]+" >&2
+    exit 1
+fi
+
+# Only require shared storage when the destination actually lives on it, so that a
+# backup into app-private storage (or a CI-like sandbox) still works.
+case "$OUTPUT_DIR" in
+    "$EXTERNAL_DIR"*)
+        if [ ! -d "$EXTERNAL_DIR" ]; then
+            echo "ERROR: shared storage is not mounted at $EXTERNAL_DIR." >&2
+            echo "NOTE: grant the app the Files permission before the first backup." >&2
+            exit 1
+        fi
+        ;;
+esac
+
+mkdir -p "$OUTPUT_DIR"
+[ -w "$OUTPUT_DIR" ] || { echo "ERROR: cannot write to $OUTPUT_DIR" >&2; exit 1; }
+
+NAME="termux-backup_${TIMESTAMP}"
+[ -n "$LABEL" ] && NAME="${NAME}_${LABEL}"
+ARCHIVE="$OUTPUT_DIR/$NAME.tar.gz"
+TMP_ARCHIVE="$ARCHIVE.partial"
+trap 'rm -f "$TMP_ARCHIVE"' EXIT
+
+SOURCES=""
+if [ "$QUICK" -eq 1 ]; then
+    LIST_VAR="QUICK_DIRS"
+else
+    LIST_VAR="STATE_DIRS"
+    SOURCES="$PREFIX"
+fi
+
+# Only pass sources that exist; a silently missing directory is how a backup
+# becomes a surprise three months later.
+ARGS=""
+for dir in ${!LIST_VAR}; do
+    if [ -e "$HOME_DIR/$dir" ]; then
+        ARGS="$ARGS $dir"
+    else
+        echo "NOTE: $HOME_DIR/$dir does not exist, skipping"
+    fi
+done
+[ -n "$SOURCES" ] && ARGS="$SOURCES $ARGS"
+
+echo "Backing up to $ARCHIVE"
+cd "$HOME_DIR"
+# shellcheck disable=SC2086
+tar $EXCLUDES -czf "$TMP_ARCHIVE" $ARGS
+
+# Rename so a crashed tar never leaves a truncated archive with a good name.
+mv "$TMP_ARCHIVE" "$ARCHIVE"
+trap - EXIT
+
+sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
+
+cat > "$ARCHIVE.manifest" <<EOF
+created_utc: $TIMESTAMP
+mode: $([ "$QUICK" -eq 1 ] && echo quick || echo full)
+app_version_code: $(cat "$PREFIX/../.termux-app_version_code" 2>/dev/null || echo unknown)
+android_release: $(getprop ro.build.version.release 2>/dev/null || echo unknown)
+archive_bytes: $(wc -c < "$ARCHIVE" | tr -d ' ')
+sha256: $(cut -d' ' -f1 "$ARCHIVE.sha256")
+contents: $ARGS
+EOF
+
+if ! sha256sum -c "$ARCHIVE.sha256" >/dev/null 2>&1; then
+    echo "ERROR: checksum mismatch for $ARCHIVE" >&2
+    exit 2
+fi
+
+# A gz stream that will not decompress to its last member is useless, so read it all.
+if ! tar -tzf "$ARCHIVE" >/dev/null 2>&1; then
+    echo "ERROR: $ARCHIVE cannot be listed; the archive is corrupt" >&2
+    exit 2
+fi
+
+echo "OK: $(basename "$ARCHIVE") ($(wc -c < "$ARCHIVE" | tr -d ' ') bytes)"
+echo "NEXT: restore this archive once before relying on it - termux-restore-prefix $ARCHIVE --into <dir>"
