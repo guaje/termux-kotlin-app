@@ -271,6 +271,17 @@
                 android:value="Execute boot scripts when device starts" />
         </service>
 
+        <!-- Devkit reload endpoint: same-uid only, and absent from release builds at runtime.
+             Not exported and no permission attribute, because the only legitimate sender is this
+             app's own uid (the am socket lives inside its data directory). See DevKitReloadReceiver. -->
+        <receiver
+            android:name=".app.devkit.DevKitReloadReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="${TERMUX_PACKAGE_NAME}.app.devkit.reload" />
+            </intent-filter>
+        </receiver>
+
         <!-- Widget Provider - Simple 1x1 -->
         <receiver
             android:name=".app.widget.TermuxWidgetProvider"

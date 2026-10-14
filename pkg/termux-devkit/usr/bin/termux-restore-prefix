@@ -33,7 +33,7 @@ IN_PLACE=0
 ASSUME_YES=0
 
 usage() {
-    sed -n '3,19p' "$0"
+    awk 'NR>2 && /^set -euo/{exit} NR>2{sub(/^# ?/, ""); print}' "$0"
     exit 1
 }
 

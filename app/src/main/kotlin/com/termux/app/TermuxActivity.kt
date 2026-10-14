@@ -210,6 +210,7 @@ class TermuxActivity : AppCompatActivity(), ServiceConnection {
         if (mIsInvalidState) return
 
         mIsVisible = true
+        isVisibleToDevKit = true
 
         mTermuxTerminalSessionActivityClient?.onStart()
         mTermuxTerminalViewClient?.onStart()
@@ -243,6 +244,7 @@ class TermuxActivity : AppCompatActivity(), ServiceConnection {
         if (mIsInvalidState) return
 
         mIsVisible = false
+        isVisibleToDevKit = false
 
         mTermuxTerminalSessionActivityClient?.onStop()
         mTermuxTerminalViewClient?.onStop()
@@ -875,6 +877,18 @@ class TermuxActivity : AppCompatActivity(), ServiceConnection {
     }
 
     companion object {
+        /**
+         * Whether a terminal UI is currently on screen.
+         *
+         * The devkit reload path reads this rather than assuming: the activity's own broadcast
+         * receiver deliberately ignores every intent while invisible, so reporting a style reload
+         * that nobody could see would teach callers to trust a fiction.
+         */
+        @JvmStatic
+        @Volatile
+        var isVisibleToDevKit = false
+            private set
+
         private const val CONTEXT_MENU_SELECT_URL_ID = 0
         private const val CONTEXT_MENU_SHARE_TRANSCRIPT_ID = 1
         private const val CONTEXT_MENU_SHARE_SELECTED_TEXT = 10
