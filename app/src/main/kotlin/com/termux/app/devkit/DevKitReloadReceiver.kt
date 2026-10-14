@@ -24,18 +24,17 @@ import com.termux.shared.logger.Logger
 class DevKitReloadReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent?) {
-        if (intent == null) {
-            return
-        }
-
-        if (!BuildConfig.DEVKIT_HOST) {
-            Logger.logWarn(LOG_TAG, "ignoring reload request: this build does not enable the devkit host")
-            return
-        }
-
-        val requestId = intent.getStringExtra(EXTRA_REQUEST_ID)?.trim()
-        if (requestId.isNullOrEmpty()) {
-            Logger.logWarn(LOG_TAG, "ignoring reload request without a request id")
+        val requestId = intent?.getStringExtra(EXTRA_REQUEST_ID)?.trim()
+        // One guard, one exit: isNullOrEmpty() carries a Kotlin contract, so requestId is still
+        // smart-cast to a non-null String below.
+        if (intent == null || !BuildConfig.DEVKIT_HOST || requestId.isNullOrEmpty()) {
+            // Nothing is written to the status file here on purpose: a stale file from an earlier
+            // request would otherwise look like the answer to this one.
+            Logger.logWarn(
+                LOG_TAG,
+                "ignoring reload request: intent=${if (intent == null) "absent" else "present"}, " +
+                    "devkitHost=${BuildConfig.DEVKIT_HOST}, requestId=$requestId"
+            )
             return
         }
 

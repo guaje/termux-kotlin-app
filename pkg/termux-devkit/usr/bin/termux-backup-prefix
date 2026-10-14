@@ -38,7 +38,7 @@ QUICK_DIRS=".termux .pi .claude .codex .hermes .local/share/opencode"
 EXCLUDES="--exclude=var/tmp --exclude=tmp --exclude=.cache --exclude=var/cache/apt/archives"
 
 usage() {
-    sed -n '3,20p' "$0"
+    awk 'NR>2 && /^set -euo/{exit} NR>2{sub(/^# ?/, ""); print}' "$0"
     exit 1
 }
 

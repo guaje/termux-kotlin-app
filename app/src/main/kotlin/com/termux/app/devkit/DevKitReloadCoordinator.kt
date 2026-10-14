@@ -51,16 +51,22 @@ class DevKitReloadCoordinator(private val context: Context) {
     fun reload(requestId: String, scopes: List<String>): List<ScopeResult> {
         val startedAt = System.currentTimeMillis()
         val results = mutableListOf<ScopeResult>()
-        val needsStyleReload = scopes.any { it == SCOPE_PROPERTIES || it == SCOPE_KEYMAPS }
-
-        if (needsStyleReload) {
-            results.add(reloadStyle())
-        }
+        val styleRequested = scopes.any { it == SCOPE_PROPERTIES || it == SCOPE_KEYMAPS }
+        // One style pass per request even when both scopes were asked for: the activity re-reads
+        // properties and the extra-keys row from the same file in the same pass, so sending the
+        // broadcast twice would only rebuild the terminal view twice.
+        val styleResult = if (styleRequested) reloadStyle() else null
 
         for (scope in scopes) {
             when (scope) {
-                SCOPE_PROPERTIES, SCOPE_KEYMAPS -> Unit // handled together, one broadcast per request
+                SCOPE_PROPERTIES -> if (styleResult != null) {
+                    results.add(styleResult.copy(scope = SCOPE_PROPERTIES))
+                }
+                SCOPE_KEYMAPS -> if (styleResult != null) {
+                    results.add(keyMapsResult(styleResult))
+                }
                 SCOPE_DEVKIT -> results.add(prepareDevKitState())
+                SCOPE_SESSIONS -> results.add(probeSessions())
                 SCOPE_PLUGINS -> results.add(
                     ScopeResult(
                         scope,
@@ -112,6 +118,47 @@ class DevKitReloadCoordinator(private val context: Context) {
         } catch (e: Exception) {
             ScopeResult(SCOPE_PROPERTIES, Outcome.FAILED, "could not reach the activity: ${e.message}")
         }
+    }
+
+    /**
+     * Report the extra-keys row separately, because a caller asking for `keymaps` cares about the
+     * key row and nothing else. The underlying work is the same style pass and the detail says so,
+     * rather than implying a second mechanism exists.
+     */
+    private fun keyMapsResult(styleResult: ScopeResult): ScopeResult {
+        val detail = if (styleResult.outcome == Outcome.APPLIED) {
+            "extra-keys row re-read by the same style pass"
+        } else {
+            styleResult.detail
+        }
+        return ScopeResult(SCOPE_KEYMAPS, styleResult.outcome, detail)
+    }
+
+    /**
+     * Report what a session restorer would find, without restoring anything.
+     *
+     * Deliberately `skipped` and never `applied`: no restorer exists yet, and a scope that claimed
+     * to have brought sessions back before P4 exists would be the one lie in this file. The probe is
+     * still worth returning, because "there was no server to restore" and "the restorer found
+     * nothing" are different problems to debug.
+     */
+    private fun probeSessions(): ScopeResult {
+        val runDir = File("$TERMUX_PREFIX_DIR_PATH/var/run")
+        val servers = runDir.listFiles { file -> file.isDirectory && file.name.startsWith("tmux-") }
+            ?.flatMap { dir ->
+                dir.listFiles { socket -> socket.isFile }?.map { socket -> "${dir.name}/${socket.name}" }
+                    ?: emptyList()
+            }
+            ?.sorted()
+            ?: emptyList()
+
+        val detail = if (servers.isEmpty()) {
+            "no session restorer is wired yet and no tmux server socket exists under $runDir"
+        } else {
+            "no session restorer is wired yet; ${servers.size} tmux server socket(s) present: " +
+                servers.joinToString(", ")
+        }
+        return ScopeResult(SCOPE_SESSIONS, Outcome.SKIPPED, detail)
     }
 
     private fun prepareDevKitState(): ScopeResult {
@@ -196,6 +243,7 @@ class DevKitReloadCoordinator(private val context: Context) {
         const val SCOPE_PROPERTIES = "properties"
         const val SCOPE_KEYMAPS = "keymaps"
         const val SCOPE_DEVKIT = "devkit"
+        const val SCOPE_SESSIONS = "sessions"
         const val SCOPE_PLUGINS = "plugins"
 
         val DEFAULT_SCOPES = listOf(SCOPE_PROPERTIES, SCOPE_KEYMAPS)

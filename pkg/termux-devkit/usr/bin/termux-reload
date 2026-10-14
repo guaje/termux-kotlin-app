@@ -6,7 +6,9 @@
 #   termux-reload --status
 #
 #   --scope NAME   Repeatable/CSV list of scopes to reload: properties, keymaps,
-#                  devkit, plugins. Default: properties,keymaps.
+#                  devkit, sessions, plugins. Default: properties,keymaps.
+#                  `sessions` probes for a live tmux server but restores nothing until P4;
+#                  `plugins` always reports skipped while the plugin host has no dispatch wiring.
 #   --wait SECS    How long to wait for the app's status file. Default: 5.
 #   --status       Print the state a reload would act on, without touching the app.
 #   --quiet        Only print the final line.
@@ -39,7 +41,7 @@ STATUS_ONLY=0
 QUIET=0
 
 usage() {
-    sed -n '3,20p' "$0"
+    awk 'NR>2 && /^set -euo/{exit} NR>2{sub(/^# ?/, ""); print}' "$0"
     exit 1
 }
 
