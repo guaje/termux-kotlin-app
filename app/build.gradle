@@ -26,6 +26,9 @@ android {
     def apkVersionTag = System.getenv("TERMUX_APK_VERSION_TAG") ?: ""
     def splitAPKsForDebugBuilds = System.getenv("TERMUX_SPLIT_APKS_FOR_DEBUG_BUILDS") ?: "1"
     def splitAPKsForReleaseBuilds = System.getenv("TERMUX_SPLIT_APKS_FOR_RELEASE_BUILDS") ?: "0" // F-Droid does not support split APKs #1904
+    // A dev build is pushed to one handset by the ship script, so a single universal APK is what the install
+    // loop wants. Set the variable to "1" when the split APK path itself is under test.
+    def splitAPKsForDevBuilds = System.getenv("TERMUX_SPLIT_APKS_FOR_DEV_BUILDS") ?: "0"
 
     defaultConfig {
         applicationId "com.termux"
@@ -53,6 +56,11 @@ android {
 
         buildConfigField "String", "TERMUX_PACKAGE_VARIANT", "\"" + project.ext.packageVariant + "\"" // Used by TermuxApplication class
 
+        // The developer kit (reload endpoint, plugin payloads) is only ever compiled into the `dev` variant.
+        // Debug and release APKs must not expose it, and CI installs the debug APKs, so the flag is false by
+        // default instead of being inferred from the build type at runtime.
+        buildConfigField "boolean", "DEVKIT_HOST", "false"
+
         manifestPlaceholders.TERMUX_PACKAGE_NAME = "com.termux"
         manifestPlaceholders.TERMUX_APP_NAME = "Termux"
         manifestPlaceholders.TERMUX_API_APP_NAME = "Termux:API"
@@ -72,7 +80,8 @@ android {
     splits {
         abi {
             enable ((gradle.startParameter.taskNames.any { it.contains("Debug") } && splitAPKsForDebugBuilds == "1") ||
-                (gradle.startParameter.taskNames.any { it.contains("Release") } && splitAPKsForReleaseBuilds == "1"))
+                (gradle.startParameter.taskNames.any { it.contains("Release") } && splitAPKsForReleaseBuilds == "1") ||
+                (gradle.startParameter.taskNames.any { it.contains("Dev") } && splitAPKsForDevBuilds == "1"))
             reset ()
             include 'x86', 'x86_64', 'armeabi-v7a', 'arm64-v8a'
             universalApk true
@@ -87,14 +96,53 @@ android {
             keyPassword 'xrj45yWGLbsO7W0v'
         }
         release {
-            def signingPropsFile = rootProject.file('signing.properties')
-            if (signingPropsFile.exists()) {
-                def signingProps = new Properties()
-                signingProps.load(new FileInputStream(signingPropsFile))
-                storeFile file(signingProps['storeFile'])
-                storePassword signingProps['storePassword']
-                keyAlias signingProps['keyAlias']
-                keyPassword signingProps['keyPassword']
+            // Signing material is resolved outside the checkout so that any clone can produce a
+            // replace-installable APK. Precedence, first hit wins:
+            //   1. TERMUX_RELEASE_* environment variables - CI, and shells that source a
+            //      chezmoi-managed env file, so nothing secret sits in the working tree.
+            //   2. $TERMUX_SIGNING_DIR/signing.properties, then
+            //      ~/.local/share/termux-kotlin/signing/signing.properties - per-user config, host-agnostic.
+            //   3. signing.properties in the repository root - what .github/workflows/release.yml writes.
+            def signingProps = new Properties()
+            def signingPropsDir = null
+            def candidatePropsFiles = []
+            def signingDirEnv = System.getenv('TERMUX_SIGNING_DIR')
+            if (signingDirEnv) {
+                candidatePropsFiles << new File(signingDirEnv, 'signing.properties')
+            }
+            candidatePropsFiles << new File(System.properties['user.home'],
+                '.local/share/termux-kotlin/signing/signing.properties')
+            candidatePropsFiles << rootProject.file('signing.properties')
+            for (candidate in candidatePropsFiles) {
+                if (candidate.exists()) {
+                    candidate.withInputStream { signingProps.load(it) }
+                    signingPropsDir = candidate.parentFile
+                    break
+                }
+            }
+            [
+                'TERMUX_RELEASE_STORE_FILE'    : 'storeFile',
+                'TERMUX_RELEASE_STORE_PASSWORD': 'storePassword',
+                'TERMUX_RELEASE_KEY_ALIAS'     : 'keyAlias',
+                'TERMUX_RELEASE_KEY_PASSWORD'  : 'keyPassword'
+            ].each { envName, propName ->
+                def value = System.getenv(envName)
+                if (value) {
+                    signingProps.setProperty(propName, value)
+                }
+            }
+            if (signingProps.getProperty('storeFile')) {
+                def storeFileValue = signingProps.getProperty('storeFile')
+                def resolvedStoreFile = new File(storeFileValue)
+                // A relative keystore name belongs to whichever properties file declared it, not to the
+                // module directory that happens to be evaluating this script.
+                if (!resolvedStoreFile.absolute && signingPropsDir != null) {
+                    resolvedStoreFile = new File(signingPropsDir, storeFileValue)
+                }
+                storeFile resolvedStoreFile
+                storePassword signingProps.getProperty('storePassword')
+                keyAlias signingProps.getProperty('keyAlias')
+                keyPassword signingProps.getProperty('keyPassword')
             }
         }
     }
@@ -109,6 +157,27 @@ android {
 
         debug {
             signingConfig signingConfigs.debug
+        }
+
+        // A build that can be installed over the developer's own handset without losing $PREFIX.
+        //
+        // `adb install -r` refuses an APK whose signer differs from the installed one, and the reflex fix
+        // (uninstall first) deletes $PREFIX along with every agent conversation and tmux history. Debug APKs
+        // are signed with app/testkey_untrusted.jks, so they can never replace a released build; this variant
+        // is signed with the release key instead. It stays non-minified and debuggable on purpose:
+        //   * no R8 - seconds per ship, and no stripped symbols for a reflective plugin host (docs/DEV_INSTALL.md)
+        //   * debuggable - `adb shell run-as com.termux` works, and `-d` can roll back to a previous dev APK
+        // It is never published: release.yml asserts a non-debuggable single-signer artifact and this variant
+        // is not what `assembleRelease` produces.
+        dev {
+            signingConfig signingConfigs.release
+            minifyEnabled false
+            shrinkResources false
+            debuggable true
+            buildConfigField "boolean", "DEVKIT_HOST", "true"
+            // The library modules only define debug and release, and their debug outputs are the ones that
+            // stay warm in the build cache during a ship loop.
+            matchingFallbacks = ['debug']
         }
     }
 
@@ -154,6 +223,10 @@ android {
             } else if (variant.buildType.name == "release") {
                 def abi = output.getFilter(com.android.build.OutputFile.ABI)
                 outputFileName = new File("termux-app_" + (apkVersionTag ? apkVersionTag : project.ext.packageVariant + "-" + "release") + "_" + (abi ? abi : "universal") + ".apk")
+            } else if (variant.buildType.name == "dev") {
+                // The ship script hardcodes this name, so a silent rename here breaks the install loop.
+                def abi = output.getFilter(com.android.build.OutputFile.ABI)
+                outputFileName = new File("termux-app_" + (apkVersionTag ? apkVersionTag : project.ext.packageVariant + "-" + "dev") + "_" + (abi ? abi : "universal") + ".apk")
             }
         }
     }
