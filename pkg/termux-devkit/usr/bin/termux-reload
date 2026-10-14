@@ -104,7 +104,11 @@ log "request $REQUEST_ID scopes: $SCOPES"
 
 # The app executes this broadcast in its own process, which is why it is delivered to
 # a receiver that the platform refuses to deliver to `adb shell`.
-OUTPUT="$("$AM" broadcast -a "$ACTION" \
+# The component must be named explicitly: Android does not deliver implicit broadcasts to manifest
+# receivers, so an `-a`-only request is accepted, reports "Broadcast completed", and reaches nobody,
+# which is indistinguishable from an endpoint that was never implemented.
+RECEIVER_COMPONENT="$PACKAGE/.app.devkit.DevKitReloadReceiver"
+OUTPUT="$("$AM" broadcast -n "$RECEIVER_COMPONENT" -a "$ACTION" \
     --es "$PACKAGE.app.devkit.request_id" "$REQUEST_ID" \
     --es "$PACKAGE.app.devkit.scopes" "$(echo "$SCOPES" | tr ' ' ',')" 2>&1 || true)"
 
