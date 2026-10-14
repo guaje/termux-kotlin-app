@@ -50,12 +50,13 @@ command -v dpkg-deb >/dev/null 2>&1 || {
 }
 [ -d "$PKG_DIR/usr/bin" ] || { echo "ERROR: missing package tree: $PKG_DIR/usr/bin" >&2; exit 1; }
 
+# Termux patches dpkg, so `dpkg --print-architecture` reports aarch64/arm/i686/x86_64 rather than
+# Debian's arm64/armhf/i386/amd64. A package whose Architecture field says amd64 is simply not
+# installable here, which is why the termux names are used verbatim in both the control file and the
+# file name - matching what scripts/build-termux-api-deb.sh ships.
 deb_arch() {
     case "$1" in
-        aarch64) echo aarch64 ;;
-        arm) echo arm ;;
-        i686) echo i386 ;;
-        x86_64) echo amd64 ;;
+        aarch64|arm|i686|x86_64) echo "$1" ;;
         *) echo "ERROR: unknown architecture $1" >&2; return 1 ;;
     esac
 }
