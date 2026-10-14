@@ -112,7 +112,7 @@ sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
 cat > "$ARCHIVE.manifest" <<EOF
 created_utc: $TIMESTAMP
 mode: $([ "$QUICK" -eq 1 ] && echo quick || echo full)
-app_version_code: $(cat "$PREFIX/../.termux-app_version_code" 2>/dev/null || echo unknown)
+app_version_code: $(grep -o '"versionCode": *[0-9]*' "$PREFIX/var/lib/termux-kotlin/devkit/host.json" 2>/dev/null | cut -d: -f2 | tr -d ' ' || echo unknown)
 android_release: $(getprop ro.build.version.release 2>/dev/null || echo unknown)
 archive_bytes: $(wc -c < "$ARCHIVE" | tr -d ' ')
 sha256: $(cut -d' ' -f1 "$ARCHIVE.sha256")

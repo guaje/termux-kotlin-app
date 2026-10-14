@@ -2,12 +2,15 @@ package com.termux.app.devkit
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
 import com.termux.BuildConfig
 import com.termux.app.TermuxActivity
 import com.termux.shared.logger.Logger
 import com.termux.shared.termux.TermuxConstants.TERMUX_APP.TERMUX_ACTIVITY
 import com.termux.shared.termux.TermuxConstants.TERMUX_PREFIX_DIR_PATH
 import java.io.File
+import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -47,6 +50,7 @@ class DevKitReloadCoordinator(private val context: Context) {
     private val statusDir = File("$TERMUX_PREFIX_DIR_PATH/var/lib/termux-kotlin/devkit")
     private val statusFile = File(statusDir, "last-reload.json")
     private val generationFile = File(statusDir, "generation")
+    private val hostFactsFile = File(statusDir, "host.json")
 
     fun reload(requestId: String, scopes: List<String>): List<ScopeResult> {
         val startedAt = System.currentTimeMillis()
@@ -166,11 +170,74 @@ class DevKitReloadCoordinator(private val context: Context) {
             if (!statusDir.isDirectory && !statusDir.mkdirs()) {
                 return ScopeResult(SCOPE_DEVKIT, Outcome.FAILED, "could not create $statusDir")
             }
-            ScopeResult(SCOPE_DEVKIT, Outcome.APPLIED, "status directory $statusDir")
+            val facts = writeHostFacts()
+            ScopeResult(
+                SCOPE_DEVKIT,
+                if (facts == null) Outcome.DEFERRED else Outcome.APPLIED,
+                facts?.let { "host facts written to $hostFactsFile" } ?: "status directory $statusDir"
+            )
         } catch (e: Exception) {
             ScopeResult(SCOPE_DEVKIT, Outcome.FAILED, e.message ?: e.javaClass.simpleName)
         }
     }
+
+    /**
+     * Publish what only the app can know about itself, for the shipping tooling to gate on.
+     *
+     * A script in the prefix cannot ask the package manager anything - `pm` is refused to this uid -
+     * yet a ship must not start unless the candidate APK is signed by the same key that is installed
+     * and carries a higher version code. So the app records those facts here and the scripts read
+     * them, instead of each script guessing from a file name.
+     *
+     * Returns null when the platform did not supply a signing certificate, which happens on nothing
+     * modern but is not worth pretending is impossible.
+     */
+    private fun writeHostFacts(): String? {
+        return try {
+            val info = context.packageManager.getPackageInfo(
+                context.packageName,
+                PackageManager.GET_SIGNING_CERTIFICATES
+            )
+            val certificate = info.signingInfo?.apkContentsSigners?.firstOrNull()
+                ?: info.signingInfo?.signingCertificateHistory?.firstOrNull()
+                ?: return null
+            val digest = MessageDigest.getInstance("SHA-256").digest(certificate.toByteArray())
+            val signer = digest.joinToString("") { "%02x".format(it) }
+
+            val flags = info.applicationInfo?.flags ?: 0
+            val debuggable = flags.and(ApplicationInfo.FLAG_DEBUGGABLE) != 0
+
+            val json = buildString {
+                appendLine("{")
+                appendLine("  " + quote("versionCode") + ": ${info.longVersionCode},")
+                appendLine("  " + quote("versionName") + ": ${quote(info.versionName ?: "")},")
+                appendLine("  " + quote("signerSha256") + ": ${quote(signer)},")
+                appendLine("  " + quote("debuggable") + ": $debuggable,")
+                appendLine("  " + quote("abi") + ": ${quote(android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "")},")
+                appendLine("  " + quote("bootId") + ": ${quote(readBootId())},")
+                appendLine("  " + quote("writtenAt") + ": ${quote(ISO_8601.format(Date()))}")
+                append("}")
+            }
+
+            if (!statusDir.isDirectory) {
+                statusDir.mkdirs()
+            }
+            val temp = File(statusDir, hostFactsFile.name + ".tmp")
+            temp.writeText(json)
+            if (!temp.renameTo(hostFactsFile)) {
+                hostFactsFile.writeText(json)
+                temp.delete()
+            }
+            signer
+        } catch (e: Exception) {
+            Logger.logError(LOG_TAG, "could not write host facts: ${e.message}")
+            null
+        }
+    }
+
+    private fun readBootId(): String = runCatching {
+        File("/proc/sys/kernel/random/boot_id").readText().trim()
+    }.getOrDefault("unknown")
 
     private fun nextGeneration(): Long {
         val previous = runCatching { generationFile.readText().trim().toLong() }.getOrNull()
@@ -235,6 +302,8 @@ class DevKitReloadCoordinator(private val context: Context) {
         }
     }
 
+    private fun quote(value: String): String = "\"${escape(value)}\""
+
     private fun escape(value: String): String = value.replace("\\", "\\\\").replace("\"", "\\\"")
 
     companion object {
@@ -250,5 +319,7 @@ class DevKitReloadCoordinator(private val context: Context) {
 
         /** Kept in memory so repeated requests stay monotonic even if the file is unwritable. */
         private val LAST_RELOAD_GENERATION = AtomicLong(0)
+
+        private val ISO_8601 = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)
     }
 }
