@@ -14,8 +14,8 @@ import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
 import java.security.MessageDigest
 import java.util.Base64
-import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 
@@ -39,7 +39,18 @@ class LoopbackWebSocketProxy(
     @Volatile
     private var activeBoundPort = 0
 
-    private val sockets = Collections.newSetFromMap(ConcurrentHashMap<Socket, Boolean>())
+    /**
+     * Live client sockets.
+     *
+     * A copy-on-write set on purpose. Connection threads remove their own socket as they finish,
+     * and [close] drains this set while they do. A `ConcurrentHashMap`-backed set iterates weakly:
+     * `hasNext()` can report true, the entry can be removed by another thread, and `next()` then
+     * throws `NoSuchElementException` out of a shutdown path, which turned into a test that failed
+     * only under load. Iteration here is over a frozen snapshot, so it cannot be promised an entry
+     * that then vanishes. The set holds a handful of sockets and is only walked at shutdown, so the
+     * copy cost is not on any hot path.
+     */
+    private val sockets = CopyOnWriteArraySet<Socket>()
     private val outputLocks = ConcurrentHashMap<Socket, Any>()
     private val clientPermits = Semaphore(MAX_CLIENTS)
 
@@ -83,7 +94,14 @@ class LoopbackWebSocketProxy(
         serverSocket = null
         activeBoundPort = 0
         closeQuietly(listener)
-        sockets.toList().forEach(::closeQuietly)
+        // Iterated with a plain loop rather than toList().forEach(): Kotlin's toList() has a
+        // size-1 fast path that calls iterator().next() without asking hasNext() first, so a socket
+        // removing itself between the size check and that call makes next() throw
+        // NoSuchElementException out of shutdown. A for-loop always consults hasNext() against the
+        // same snapshot, which is the only safe pattern against a collection other threads mutate.
+        for (socket in sockets) {
+            closeQuietly(socket)
+        }
         sockets.clear()
         outputLocks.clear()
         diagnostic("Stopped")

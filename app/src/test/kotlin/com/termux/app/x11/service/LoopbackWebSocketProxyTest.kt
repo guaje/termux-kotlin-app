@@ -145,8 +145,24 @@ class LoopbackWebSocketProxyTest {
         }
     }
 
+    /**
+     * Regression guard for a shutdown race, so the body runs repeatedly.
+     *
+     * [LoopbackWebSocketProxy.close] drains a set that connection threads mutate as they finish.
+     * It used to snapshot that set with Kotlin's `toList()`, whose size-1 fast path calls
+     * `iterator().next()` without asking `hasNext()` first: a socket removing itself between the
+     * size check and that call made `next()` throw `NoSuchElementException` from the shutdown path.
+     * The window is microseconds wide, so the suite only ever failed on a loaded CI runner, which is
+     * exactly how it sat there as an intermittent failure. Repeating the round trip is the cheapest
+     * way to hit the interleaving without adding a test-only hook to production code; the whole class
+     * still finishes in seconds.
+     */
     @Test
     fun maskedBinaryFramesRoundTripWithBackendAndPingIsNotForwarded() {
+        repeat(CONNECTION_REPEATS) { maskedBinaryFrameRoundTripOnce() }
+    }
+
+    private fun maskedBinaryFrameRoundTripOnce() {
         val received = ByteArrayOutputStream()
         val backendReady = CountDownLatch(1)
         val backendDone = CountDownLatch(1)
@@ -516,6 +532,9 @@ class LoopbackWebSocketProxyTest {
 
     companion object {
         private const val SOCKET_TIMEOUT_MS = 2_000
+
+        /** See [maskedBinaryFramesRoundTripWithBackendAndPingIsNotForwarded]. */
+        private const val CONNECTION_REPEATS = 200
         private val loopback: InetAddress = InetAddress.getByName("127.0.0.1")
     }
 }
