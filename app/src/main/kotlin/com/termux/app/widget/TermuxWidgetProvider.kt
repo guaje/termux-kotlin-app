@@ -335,14 +335,17 @@ class TermuxWidgetProvider : AppWidgetProvider() {
             return
         }
 
-        // Ensure the resolved path stays within the shortcuts base directory.
-        if (!resolvedFile.path.startsWith(shortcutsBaseDir.path + File.separator)) {
-            Logger.logWarn(LOG_TAG, "Rejected shortcut outside of allowed directory: $shortcutPath")
-            return
+        // Compute one rejection reason instead of returning from each check: this function is
+        // allowed two exits, and a single warning that names the reason is also easier to read in
+        // logcat than two similar ones.
+        val rejection = when {
+            !resolvedFile.path.startsWith(shortcutsBaseDir.path + File.separator) ->
+                "outside the allowed directory ${shortcutsBaseDir.path}"
+            !resolvedFile.exists() -> "not found at ${resolvedFile.path}"
+            else -> null
         }
-
-        if (!resolvedFile.exists()) {
-            Logger.logWarn(LOG_TAG, "Shortcut file not found: ${resolvedFile.path}")
+        if (rejection != null) {
+            Logger.logWarn(LOG_TAG, "Rejected shortcut $shortcutPath: $rejection")
             return
         }
         
