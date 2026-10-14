@@ -1,0 +1,10 @@
+# Termux-Kotlin package feed (unsigned, so [trusted=yes] is required).
+#
+# Install in one command on the device:
+#   echo "deb [trusted=yes] https://guaje.github.io/termux-kotlin-app/repo/$(dpkg --print-architecture)/ ./" \
+#     > "$PREFIX/etc/apt/sources.list.d/termux-kotlin.list"
+#   pkg update
+#
+# Or write the line yourself, using the architecture reported by
+# dpkg --print-architecture: aarch64, arm, x86_64 or i686.
+deb [trusted=yes] https://guaje.github.io/termux-kotlin-app/repo/ARCH/ ./
