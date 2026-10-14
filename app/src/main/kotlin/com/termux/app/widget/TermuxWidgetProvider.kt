@@ -6,10 +6,15 @@ import android.appwidget.AppWidgetProvider
 import android.content.Context
 import android.content.Intent
 import android.graphics.BitmapFactory
+import android.net.Uri
+import android.os.Build
 import android.widget.RemoteViews
 import com.termux.R
 import com.termux.app.TermuxActivity
+import com.termux.app.TermuxService
 import com.termux.shared.logger.Logger
+import com.termux.shared.shell.command.ExecutionCommand.Runner
+import com.termux.shared.termux.TermuxConstants.TERMUX_APP.TERMUX_SERVICE
 import dagger.hilt.android.AndroidEntryPoint
 import java.io.File
 import javax.inject.Inject
@@ -330,52 +335,59 @@ class TermuxWidgetProvider : AppWidgetProvider() {
             return
         }
 
-        // Ensure the resolved path stays within the shortcuts base directory.
-        if (!resolvedFile.path.startsWith(shortcutsBaseDir.path + File.separator)) {
-            Logger.logWarn(LOG_TAG, "Rejected shortcut outside of allowed directory: $shortcutPath")
-            return
+        // Compute one rejection reason instead of returning from each check: this function is
+        // allowed two exits, and a single warning that names the reason is also easier to read in
+        // logcat than two similar ones.
+        val rejection = when {
+            !resolvedFile.path.startsWith(shortcutsBaseDir.path + File.separator) ->
+                "outside the allowed directory ${shortcutsBaseDir.path}"
+            !resolvedFile.exists() -> "not found at ${resolvedFile.path}"
+            else -> null
         }
-
-        if (!resolvedFile.exists()) {
-            Logger.logWarn(LOG_TAG, "Shortcut file not found: ${resolvedFile.path}")
+        if (rejection != null) {
+            Logger.logWarn(LOG_TAG, "Rejected shortcut $shortcutPath: $rejection")
             return
         }
         
         if (isTask) {
-            // Execute in background without terminal UI
-            executeBackgroundTask(context, resolvedFile.absolutePath, shortcutName)
+            executeShortcutCommand(context, resolvedFile.absolutePath, shortcutName, Runner.APP_SHELL)
         } else {
-            // Launch Termux with script
-            launchTermuxWithScript(context, resolvedFile.absolutePath)
+            // A widget tap means "run this where I can watch it", which is what the
+            // TERMINAL_SESSION runner does. Launching TermuxActivity with a SCRIPT_PATH extra
+            // instead did nothing at all: no code in this app ever read that extra.
+            executeShortcutCommand(context, resolvedFile.absolutePath, shortcutName, Runner.TERMINAL_SESSION)
         }
     }
-    
+
     /**
-     * Execute script in background (for tasks).
+     * Hand a shortcut script to TermuxService for execution.
+     *
+     * This deliberately does not use the RUN_COMMAND interface. RunCommandService is the
+     * *external* entry point and refuses every request unless the "allow-external-apps"
+     * property is true, which is off by default, so a widget - which is this very app - would
+     * be blocked by its own policy. Passing ACTION_SERVICE_EXECUTE straight to TermuxService is
+     * what RunCommandService itself does once it has cleared that gate.
      */
-    private fun executeBackgroundTask(
+    private fun executeShortcutCommand(
         context: Context,
         shortcutPath: String,
-        shortcutName: String
+        shortcutName: String,
+        runner: Runner
     ) {
-        // Send broadcast to TermuxService
-        val intent = Intent("com.termux.RUN_COMMAND").apply {
-            setPackage("com.termux")
-            putExtra("com.termux.RUN_COMMAND_PATH", shortcutPath)
-            putExtra("com.termux.RUN_COMMAND_LABEL", shortcutName)
-            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+        Logger.logInfo(LOG_TAG, "Executing shortcut: $shortcutName (runner=${runner.getName()})")
+
+        val execIntent = Intent(
+            TERMUX_SERVICE.ACTION_SERVICE_EXECUTE,
+            Uri.Builder().scheme(TERMUX_SERVICE.URI_SCHEME_SERVICE_EXECUTE).path(shortcutPath).build()
+        )
+        execIntent.setClass(context, TermuxService::class.java)
+        execIntent.putExtra(TERMUX_SERVICE.EXTRA_RUNNER, runner.getName())
+        execIntent.putExtra(TERMUX_SERVICE.EXTRA_COMMAND_LABEL, "Termux Shortcut: $shortcutName")
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(execIntent)
+        } else {
+            context.startService(execIntent)
         }
-        context.sendBroadcast(intent)
-    }
-    
-    /**
-     * Launch Termux with a script.
-     */
-    private fun launchTermuxWithScript(context: Context, shortcutPath: String) {
-        val intent = Intent(context, TermuxActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            putExtra("com.termux.SCRIPT_PATH", shortcutPath)
-        }
-        context.startActivity(intent)
     }
 }
