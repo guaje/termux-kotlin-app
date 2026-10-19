@@ -112,12 +112,13 @@ Depends: bash, termux-am, termux-tools
 Priority: optional
 Section: shells
 Homepage: https://github.com/guaje/termux-kotlin-app
-Description: Developer kit for Termux-Kotlin (reload, backup, restore)
+Description: Developer kit for Termux-Kotlin (reload, backup, restore, ship)
  Provides the on-device commands used by the developer loop: termux-reload to
- re-read configuration in the running app, and termux-backup-prefix plus
- termux-restore-prefix to make an app reinstall reversible. Everything here is
- scripts and configuration, so it ships through the package feed and never needs
- an APK install.
+ re-read configuration in the running app, termux-backup-prefix and
+ termux-restore-prefix to make an app reinstall reversible, and termux-ship to
+ prepare, dispatch and reconcile an APK replacement without keeping faith about
+ what state the attempt was in. Everything here is scripts and configuration, so
+ it ships through the package feed and never needs an APK install.
 EOF
 
     validate_payload "$root" || { rm -rf "$root"; exit 1; }
@@ -130,7 +131,7 @@ EOF
     verify="$WORK_DIR/verify-$arch"
     mkdir -p "$verify"
     dpkg-deb -x "$WORK_DIR/$deb_name" "$verify"
-    for script in termux-reload termux-backup-prefix termux-restore-prefix; do
+    for script in termux-reload termux-backup-prefix termux-restore-prefix termux-ship; do
         if [ ! -f "$verify$PREFIX/bin/$script" ]; then
             echo "ERROR: $deb_name does not contain bin/$script" >&2
             exit 1

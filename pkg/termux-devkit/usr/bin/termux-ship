@@ -1,0 +1,468 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# Prepare, hand off, and reconcile replacing the running APK, without ever losing
+# track of what state the attempt was in.
+#
+# Usage:
+#   termux-ship --apk PATH --version-code N [options]
+#   termux-ship --status
+#   termux-ship --recover
+#   termux-ship --forget
+#
+#   --apk PATH              The APK to install. Required for a new attempt.
+#   --version-code N        versionCode of that APK. Required for a new attempt.
+#                           Termux has no aapt, so nobody can read it out of the
+#                           file; being told is the only option, which is exactly
+#                           why the attempt is reconciled against fact afterwards.
+#   --version-name S        Cosmetic label recorded in the ledger.
+#   --abi LIST              Comma-separated ABIs the APK carries. Auto-detected
+#                           from lib/ when the APK is readable by unzip.
+#   --signer-sha256 HEX     Certificate SHA-256 of the APK's signer.
+#   --allow-unverified-signer
+#                           Ship without proving signer lineage. Read the warning
+#                           below before using this.
+#   --allow-equal-version   Permit N equal to the installed versionCode (dev
+#                           iteration). Downgrades are never permitted.
+#   --require-backup HOURS  Refuse unless a prefix backup is younger than HOURS.
+#                           Default 24. 0 disables the gate.
+#   --backup-dir DIR        Where termux-backup-prefix writes.
+#                           Default /sdcard/Download/termux-backups.
+#   --prepare-only          Record PREPARED and stop. Do not touch the app.
+#   --wait SECONDS          How long to wait for the app's ship status file.
+#                           Default 10.
+#   --status                Print facts and any open attempt. Writes nothing.
+#   --recover               Reconcile an open attempt against what the app now
+#                           reports. Run this after a replacement that killed the
+#                           app, and after any reboot.
+#   --forget                Close an open attempt as ABANDONED.
+#
+# Output:
+#   Preflight verdicts, then the ledger transition actually written.
+#
+# Exit codes:
+#   0  attempt prepared/dispatched as asked, or open attempt reconciled
+#   1  dispatch could not be delivered
+#   2  delivered and the app reported failure
+#   3  delivered and the app did not answer before the timeout
+#   4  an attempt is already open, or one is open and needs --recover
+#   5  preflight refused (the reason names the gate)
+#
+# WHY A LEDGER AT ALL: replacing the APK kills this process group, so the caller
+# cannot survive to see its own result. A plain log cannot answer "did the install
+# land, or did we die mid-flight?" - a wrong answer to that question is how you end
+# up believing your agents are still running when the prefix was re-bootstrapped
+# under you. Every state change is appended before it is acted on, and the current
+# attempt is written atomically, so an interrupted attempt is still readable, and
+# --recover decides from host facts rather than from hope.
+#
+# WHY SIGNER LINEAGE IS A HARD GATE: installing an APK signed by a different key
+# over a live package does not fail safe. It fails with
+# INSTALL_FAILED_UPDATE_INCOMPATIBLE, and the recovery everyone reaches for is
+# uninstall, which deletes the prefix and every session, agent and key inside it.
+
+set -euo pipefail
+
+PREFIX="${TERMUX_PREFIX:-/data/data/com.termux/files/usr}"
+PACKAGE="${TERMUX_PACKAGE_NAME:-com.termux}"
+STATE_DIR="${TERMUX_DEVKIT_STATE_DIR:-$PREFIX/var/lib/termux-kotlin/devkit}"
+HOST_FACTS="$STATE_DIR/host.json"
+LEDGER="$STATE_DIR/ship-ledger.jsonl"
+CURRENT="$STATE_DIR/ship-current.json"
+GENERATION_FILE="$STATE_DIR/ship-generation"
+STATUS_FILE="${TERMUX_DEVKIT_SHIP_STATUS_FILE:-$STATE_DIR/last-ship.json}"
+BACKUP_DIR="${TERMUX_BACKUP_DIR:-/sdcard/Download/termux-backups}"
+ACTION="$PACKAGE.app.devkit.ship"
+RECEIVER="$PACKAGE/.app.devkit.DevKitShipReceiver"
+
+APK=""
+VERSION_CODE=""
+VERSION_NAME=""
+ABI=""
+SIGNER=""
+ALLOW_UNVERIFIED_SIGNER=0
+ALLOW_EQUAL_VERSION=0
+REQUIRE_BACKUP_HOURS=24
+PREPARE_ONLY=0
+WAIT_SECONDS=10
+MODE="ship"
+
+usage() {
+    awk 'NR>2 && /^set -euo/{exit} NR>2{sub(/^# ?/, ""); print}' "$0"
+    exit 1
+}
+
+die() { echo "ERROR: $*" >&2; exit 1; }
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --apk) APK="$2"; shift 2 ;;
+        --version-code) VERSION_CODE="$2"; shift 2 ;;
+        --version-name) VERSION_NAME="$2"; shift 2 ;;
+        --abi) ABI="$2"; shift 2 ;;
+        --signer-sha256) SIGNER="$2"; shift 2 ;;
+        --allow-unverified-signer) ALLOW_UNVERIFIED_SIGNER=1; shift ;;
+        --allow-equal-version) ALLOW_EQUAL_VERSION=1; shift ;;
+        --require-backup) REQUIRE_BACKUP_HOURS="$2"; shift 2 ;;
+        --backup-dir) BACKUP_DIR="$2"; shift 2 ;;
+        --prepare-only) PREPARE_ONLY=1; shift ;;
+        --wait) WAIT_SECONDS="$2"; shift 2 ;;
+        --status) MODE="status"; shift ;;
+        --recover) MODE="recover"; shift ;;
+        --forget) MODE="forget"; shift ;;
+        -h|--help) usage ;;
+        *) echo "ERROR: unknown argument: $1" >&2; usage ;;
+    esac
+done
+
+json_escape() {
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/ /g' | tr -d '\000-\037'
+}
+
+now_iso() { date '+%Y-%m-%dT%H:%M:%S%z'; }
+
+# A fact read from the app's own host.json. Quoted patterns below because Termux ships GNU grep.
+host_fact() {
+    local field="$1"
+    sed -n 's/.*"'"$field"'"[[:space:]]*:[[:space:]]*"\{0,1\}\([^",}]*\)"\{0,1\}.*/\1/p' "$HOST_FACTS" | head -1
+}
+
+read_field() {
+    local file="$1" field="$2"
+    sed -n 's/.*"'"$field"'"[[:space:]]*:[[:space:]]*"\{0,1\}\([^",}]*\)"\{0,1\}.*/\1/p' "$file" | head -1
+}
+
+num_field() {
+    # Same as read_field, but never empty and never non-numeric: a missing number written as
+    # nothing would corrupt every ledger line that follows it.
+    local value
+    value=$(read_field "$1" "$2")
+    case "$value" in
+        ''|*[!0-9]*) printf '0' ;;
+        *) printf '%s' "$value" ;;
+    esac
+}
+
+next_generation() {
+    local current=0
+    [ -f "$GENERATION_FILE" ] && current=$(tr -cd '0-9' < "$GENERATION_FILE")
+    [ -n "$current" ] || current=0
+    printf '%s' "$((current + 1))"
+}
+
+# Appends before acting, and writes the open attempt by temp file + rename, so a
+# crash leaves either the old content or the new content and never a half file.
+ledger_append() {
+    local line="$1"
+    mkdir -p "$STATE_DIR"
+    printf '%s\n' "$line" >> "$LEDGER"
+}
+
+write_current() {
+    local line="$1" temp
+    temp="$CURRENT.tmp.$$"
+    printf '%s\n' "$line" > "$temp"
+    mv -f "$temp" "$CURRENT"
+}
+
+close_current() {
+    rm -f "$CURRENT"
+}
+
+# One transition: append to the ledger and mirror it into the open-attempt file.
+transition() {
+    local state="$1" generation="$2" extra="$3" line
+    line='{"generation":'"$generation"',"state":"'"$(json_escape "$state")"'","at":"'"$(now_iso)"'"'"$extra"'}'
+    ledger_append "$line"
+    if [ "$state" = "SUCCEEDED" ] || [ "$state" = "FAILED" ] || [ "$state" = "ABANDONED" ]; then
+        close_current
+    else
+        write_current "$line"
+    fi
+    printf '%s\n' "$line"
+}
+
+# Rebuilds the ledger context of an open attempt so that a closing transition carries
+# the same fields as the transition that opened it. Written with printf instead of one
+# long quoted concatenation, which is hard to read and easy to get wrong.
+extra_context() {
+    local file="$1" reason="$2" boot="${3:-}"
+    [ -n "$boot" ] || boot=$(read_field "$file" bootId)
+    printf ',"apk":"%s","fromVersionCode":%s,"toVersionCode":%s,"bootId":"%s","reason":"%s"' \
+        "$(json_escape "$(read_field "$file" apk)")" \
+        "$(num_field "$file" fromVersionCode)" \
+        "$(num_field "$file" toVersionCode)" \
+        "$(json_escape "$boot")" \
+        "$(json_escape "$reason")"
+}
+
+print_status() {
+    echo "host facts: $([ -f "$HOST_FACTS" ] && echo present || echo absent)  $HOST_FACTS"
+    if [ -f "$HOST_FACTS" ]; then
+        echo "  versionCode : $(host_fact versionCode)  versionName: $(host_fact versionName)"
+        echo "  signer      : $(host_fact signerSha256)"
+        echo "  abi         : $(host_fact abi)  debuggable: $(host_fact debuggable)"
+        echo "  bootId      : $(host_fact bootId)"
+        echo "  writtenAt   : $(host_fact writtenAt)"
+    fi
+    echo "ledger    : $([ -f "$LEDGER" ] && echo "$(wc -l < "$LEDGER" | tr -d ' ') transitions" || echo 'none yet')  $LEDGER"
+    echo "endpoint  : $([ -f "$STATUS_FILE" ] && echo answered || echo 'never answered')  $STATUS_FILE"
+    if [ -f "$CURRENT" ]; then
+        echo "OPEN ATTEMPT: $(read_field "$CURRENT" state) generation $(read_field "$CURRENT" generation)"
+        echo "  target      : $(read_field "$CURRENT" toVersionCode)"
+        echo "  apk         : $(read_field "$CURRENT" apk)"
+        echo "  dispatchedAt: $(read_field "$CURRENT" bootId)"
+        echo "Run termux-ship --recover to reconcile it against what the app reports now."
+    else
+        echo "open attempt: none"
+    fi
+}
+
+[ -d "$STATE_DIR" ] || mkdir -p "$STATE_DIR"
+
+case "$MODE" in
+    status)
+        print_status
+        [ -f "$CURRENT" ] && exit 4
+        exit 0
+        ;;
+
+    forget)
+        [ -f "$CURRENT" ] || { echo "Nothing open to forget."; exit 0; }
+        generation=$(read_field "$CURRENT" generation)
+        state=$(read_field "$CURRENT" state)
+        extra=$(extra_context "$CURRENT" "closed by hand with --forget")
+        echo "Closing generation $generation (was $state) as ABANDONED."
+        transition "ABANDONED" "$generation" "$extra"
+        exit 0
+        ;;
+
+    recover)
+        if [ ! -f "$CURRENT" ]; then
+            echo "No open attempt. Nothing to reconcile."
+            [ -f "$LEDGER" ] && tail -3 "$LEDGER"
+            exit 0
+        fi
+        generation=$(read_field "$CURRENT" generation)
+        state=$(read_field "$CURRENT" state)
+        from_code=$(num_field "$CURRENT" fromVersionCode)
+        to_code=$(num_field "$CURRENT" toVersionCode)
+        boot_at_dispatch=$(read_field "$CURRENT" bootId)
+        if [ ! -f "$HOST_FACTS" ]; then
+            echo "ERROR: cannot reconcile without host.json; the app has not started since the replacement." >&2
+            exit 4
+        fi
+        now_code=$(host_fact versionCode)
+        now_boot=$(host_fact bootId)
+        # Version first: a replacement that landed and then rebooted is a success, not an
+        # abandonment, and comparing bootId alone would have called it the other thing.
+        if [ "$now_code" -ge "$to_code" ] && [ "$to_code" -gt 0 ]; then
+            echo "Host now reports versionCode $now_code (target $to_code): the replacement landed."
+            transition "SUCCEEDED" "$generation" "$(extra_context "$CURRENT" "host versionCode reached target" "$now_boot")"
+            exit 0
+        fi
+        if [ -n "$now_boot" ] && [ "$now_boot" != "$boot_at_dispatch" ]; then
+            echo "Boot boundary crossed and host still reports $now_code: the install never landed."
+            transition "ABANDONED" "$generation" "$(extra_context "$CURRENT" "boot boundary crossed without reaching target versionCode" "$now_boot")"
+            exit 0
+        fi
+        echo "STILL OPEN: generation $generation is $state, host reports versionCode $now_code, target $to_code, same bootId."
+        echo "Nothing is concluded from that alone - the app may still be mid-install."
+        echo "Use --forget to close it deliberately, or --recover again once the app has restarted."
+        exit 4
+        ;;
+
+esac
+
+# ---------------------------------------------------------------------------
+# New attempt: preflight, then the ledger.
+# ---------------------------------------------------------------------------
+[ -n "$APK" ] || { echo "ERROR: --apk is required for a new attempt" >&2; usage; }
+[ -n "$VERSION_CODE" ] || { echo "ERROR: --version-code is required for a new attempt" >&2; usage; }
+
+if [ -f "$CURRENT" ]; then
+    echo "ERROR: an attempt is already open: generation $(read_field "$CURRENT" generation) is $(read_field "$CURRENT" state)." >&2
+    echo "Refusing to stack a second replacement on an unresolved one. Run --recover, or --forget to close it." >&2
+    exit 4
+fi
+
+echo "Preflight for $APK"
+refused=0
+fail() { echo "  [refuse] $1"; refused=$((refused + 1)); }
+pass() { echo "  [ok]     $1"; }
+
+# G1 - the artifact itself.
+if [ -f "$APK" ] && [ -r "$APK" ]; then
+    apk_size=$(stat -c '%s' "$APK")
+    apk_sha256=$(sha256sum "$APK" | cut -d' ' -f1)
+    if [ "$apk_size" -gt 1048576 ]; then
+        pass "apk readable, $apk_size bytes, sha256 ${apk_sha256:0:16}..."
+    else
+        fail "apk is $apk_size bytes; a Termux APK is far larger, so this is probably a truncated transfer"
+    fi
+else
+    fail "apk missing or unreadable: $APK"
+fi
+
+# G2 - a version code we can compare at all.
+case "$VERSION_CODE" in
+    ''|*[!0-9]*) fail "--version-code must be a positive integer, got '$VERSION_CODE'" ;;
+    *) pass "target versionCode $VERSION_CODE" ;;
+esac
+
+# G3 - host facts. Without them every later gate is a guess, and a guess here is
+# made against a running system holding work nobody can recreate.
+if [ -f "$HOST_FACTS" ] && [ -n "$(host_fact versionCode)" ] && [ -n "$(host_fact bootId)" ]; then
+    installed_code=$(host_fact versionCode)
+    host_boot=$(host_fact bootId)
+    host_signer=$(host_fact signerSha256)
+    host_abi=$(host_fact abi)
+    pass "host facts present: running versionCode $installed_code, abi $host_abi"
+else
+    installed_code=""; host_boot=""; host_signer=""; host_abi=""
+    fail "no usable host.json at $HOST_FACTS - the app writes it when it starts, and every gate below needs it"
+fi
+
+# G4 - direction of travel.
+if [ -n "$installed_code" ] && [ -n "$VERSION_CODE" ]; then
+    if [ "$VERSION_CODE" -gt "$installed_code" ]; then
+        pass "upgrade $installed_code -> $VERSION_CODE"
+    elif [ "$VERSION_CODE" -eq "$installed_code" ] && [ "$ALLOW_EQUAL_VERSION" -eq 1 ]; then
+        pass "reinstall of versionCode $installed_code (--allow-equal-version)"
+    elif [ "$VERSION_CODE" -eq "$installed_code" ]; then
+        fail "versionCode $VERSION_CODE equals the installed one; pass --allow-equal-version to reinstall deliberately"
+    else
+        fail "versionCode $VERSION_CODE is below the installed $installed_code; downgrading a live install is never automatic"
+    fi
+fi
+
+# G5 - signer lineage. Deliberately loud: getting this wrong does not fail safe.
+if [ -z "$SIGNER" ] && [ -z "$ABI" ] && command -v unzip >/dev/null 2>&1 && [ -f "$APK" ] && [ -r "$APK" ]; then
+    detected=$(unzip -Z1 "$APK" 'lib/*' 2>/dev/null | sed -n 's|^lib/\([^/]*\)/.*|\1|p' | sort -u | paste -sd, -)
+    [ -n "$detected" ] && ABI="$detected"
+fi
+if [ -n "$SIGNER" ] && [ -n "$host_signer" ]; then
+    if [ "$(printf '%s' "$SIGNER" | tr -d ':' | tr 'A-F' 'a-f')" = "$(printf '%s' "$host_signer" | tr 'A-F' 'a-f')" ]; then
+        pass "signer matches the installed app (${SIGNER:0:16}...)"
+    else
+        fail "signer $SIGNER does not match the installed app's $host_signer; installing it means INSTALL_FAILED_UPDATE_INCOMPATIBLE, and the usual fix for that is an uninstall, which deletes the prefix"
+    fi
+elif [ "$ALLOW_UNVERIFIED_SIGNER" -eq 1 ]; then
+    echo "  [warn]   signer lineage NOT verified (--allow-unverified-signer). If this APK is signed by a different key, the install will fail and the obvious recovery - uninstall - destroys $PREFIX."
+else
+    fail "no --signer-sha256, so lineage cannot be proved; pass it, or --allow-unverified-signer once you have read what it risks"
+fi
+
+# G6 - ABI. A 32-bit-only APK over a 64-bit install fails with no matching ABIs.
+if [ -n "$ABI" ] && [ -n "$host_abi" ]; then
+    case ",$ABI," in
+        *",$host_abi,"*) pass "apk carries the running abi ($ABI covers $host_abi)" ;;
+        *) fail "apk ABIs '$ABI' do not include the running abi '$host_abi'" ;;
+    esac
+elif [ -n "$host_abi" ]; then
+    fail "cannot tell which ABIs the apk carries; pass --abi (comma-separated) - unzip is $(command -v unzip >/dev/null 2>&1 && echo present || echo absent)"
+fi
+
+# G7 - backup freshness, measured on the device clock only. Mixing the laptop's
+# clock into this would make the gate lie whenever the two disagree.
+if [ "$REQUIRE_BACKUP_HOURS" -gt 0 ]; then
+    newest=""
+    newest_age=""
+    if [ -d "$BACKUP_DIR" ]; then
+        newest=$(find "$BACKUP_DIR" -maxdepth 1 -type f \( -name '*.tar.zst' -o -name '*.tar.gz' -o -name '*.tar' \) -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+        if [ -n "$newest" ]; then
+            newest_mtime=$(stat -c '%Y' "$newest")
+            newest_age=$(( ($(date +%s) - newest_mtime) / 3600 ))
+            if [ "$newest_age" -lt "$REQUIRE_BACKUP_HOURS" ]; then
+                pass "backup ${newest##*/} is ${newest_age}h old (< ${REQUIRE_BACKUP_HOURS}h)"
+            else
+                fail "newest backup is ${newest_age}h old (>= ${REQUIRE_BACKUP_HOURS}h); run termux-backup-prefix first"
+            fi
+        else
+            fail "no archives in $BACKUP_DIR; run termux-backup-prefix first, or --require-backup 0 if you mean it"
+        fi
+    else
+        fail "backup directory $BACKUP_DIR is not readable - that usually means storage permission, not an empty folder"
+    fi
+else
+    echo "  [warn]   backup gate disabled (--require-backup 0)"
+fi
+
+# G8 - space. The installer re-bootstraps a prefix that looks empty, so a ship that
+# runs out of room halfway is the worst case this tool knows about.
+if [ -n "${apk_size:-}" ]; then
+    avail_kb=$(df -k "$PREFIX" | tail -1 | awk '{print $4}')
+    needed_kb=$(( (apk_size / 1024) * 3 ))
+    if [ -n "$avail_kb" ] && [ "$avail_kb" -ge "$needed_kb" ]; then
+        pass "free ${avail_kb}K on $PREFIX (needs ${needed_kb}K)"
+    else
+        fail "only ${avail_kb}K free on $PREFIX; this attempt needs ${needed_kb}K"
+    fi
+fi
+
+if [ "$refused" -gt 0 ]; then
+    echo
+    echo "REFUSED: $refused preflight gate(s) failed. Nothing was dispatched and the ledger was not touched."
+    exit 5
+fi
+
+generation=$(next_generation)
+extra=',"apk":"'"$(json_escape "$APK")"'","sha256":"'"$(json_escape "${apk_sha256:-}")"'","fromVersionCode":'"${installed_code:-0}"',"toVersionCode":'"$VERSION_CODE"',"bootId":"'"$(json_escape "${host_boot:-}")"'","abi":"'"$(json_escape "${ABI:-unknown}")"'","signerSha256":"'"$(json_escape "${SIGNER:-unverified}")"'","backup":"'"$(json_escape "${newest:-none}")"'"'
+[ -n "$VERSION_NAME" ] && extra="$extra,\"versionName\":\"$(json_escape "$VERSION_NAME")\""
+
+transition "PREPARED" "$generation" "$extra" >/dev/null
+echo
+echo "PREPARED generation $generation recorded in $LEDGER"
+
+if [ "$PREPARE_ONLY" -eq 1 ]; then
+    echo "STOPPED after PREPARED (--prepare-only). The attempt is open; --recover closes the loop later."
+    exit 0
+fi
+
+# Hand off. The endpoint is the app's own receiver: a foreign uid cannot reach it,
+# and the app performs the PackageInstaller session as itself.
+if ! command -v termux-am >/dev/null 2>&1; then
+    transition "FAILED" "$generation" "$extra,\"reason\":\"termux-am is not installed, so the request could not be delivered\"" >/dev/null
+    echo "DISPATCH FAILED: termux-am is not installed."
+    exit 1
+fi
+
+before_generation=""
+[ -f "$STATUS_FILE" ] && before_generation=$(read_field "$STATUS_FILE" generation)
+
+if ! termux-am broadcast -n "$RECEIVER" -a "$ACTION" \
+        --es apk "$APK" \
+        --esa abi "${ABI:-unknown}" \
+        --ei version_code "$VERSION_CODE" \
+        --es signer_sha256 "${SIGNER:-}" \
+        --el prepared_at "$(date +%s)" 2>/dev/null; then
+    transition "FAILED" "$generation" "$extra,\"reason\":\"the endpoint refused the broadcast\"" >/dev/null
+    echo "DISPATCH FAILED: termux-am refused to deliver to $RECEIVER."
+    exit 1
+fi
+
+transition "DISPATCHED" "$generation" "$extra" >/dev/null
+echo "DISPATCHED generation $generation to $RECEIVER"
+
+elapsed=0
+while [ "$elapsed" -lt "$WAIT_SECONDS" ]; do
+    if [ -f "$STATUS_FILE" ]; then
+        answered=$(read_field "$STATUS_FILE" generation)
+        if [ -n "$answered" ] && [ "$answered" != "$before_generation" ]; then
+            accepted=$(read_field "$STATUS_FILE" accepted)
+            reason=$(read_field "$STATUS_FILE" reason)
+            if [ "$accepted" = "true" ]; then
+                echo "Endpoint accepted generation $answered. The replacement kills this process group, so this is as far as a live caller sees."
+                echo "After the app comes back: termux-ship --recover"
+                exit 0
+            fi
+            transition "FAILED" "$generation" "$extra,\"reason\":\"$(json_escape "${reason:-endpoint reported failure}")\"" >/dev/null
+            echo "ENDPOINT REFUSED: ${reason:-no reason given}"
+            exit 2
+        fi
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+done
+
+echo "TIMEOUT: no answer from $RECEIVER within ${WAIT_SECONDS}s. The attempt stays open as DISPATCHED."
+echo "If the app died during this, run termux-ship --recover once it is back."
+exit 3

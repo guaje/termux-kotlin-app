@@ -21,7 +21,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${1:-$SCRIPT_DIR/../repo}"
 EXPECTED_VERSION="${TERMUX_DEBKIT_VERSION:-0.1.0}"
 PREFIX="/data/data/com.termux/files/usr"
-COMMANDS=(termux-reload termux-backup-prefix termux-restore-prefix)
+COMMANDS=(termux-reload termux-backup-prefix termux-restore-prefix termux-ship)
 ARCHITECTURES=(aarch64 arm x86_64 i686)
 
 if [[ ! -d "$REPO_DIR" ]]; then
