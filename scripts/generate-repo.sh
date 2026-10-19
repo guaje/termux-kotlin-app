@@ -86,11 +86,42 @@ generate_packages() {
     fi
 }
 
+generate_root_packages() {
+    # One index at the repository root, holding every architecture. This is what makes the feed
+    # consumable: apt resolves a flat repository's downloads as URI + Filename, and Filename is
+    # root-relative here ("aarch64/foo.deb"), so only a URI at the repository root downloads to the
+    # right place. Pointing apt at repo/aarch64/ instead would fetch a good index and then look for
+    # repo/aarch64/aarch64/foo.deb.
+    #
+    # Devices pick their own rows with `deb [arch=aarch64] ... ./`; the Architecture field each stanza
+    # already carries is what apt filters on. The per-architecture indexes stay, because Release
+    # checksums list them and existing sources point at them.
+    local arch
+    : > "$REPO_DIR/Packages"
+    for arch in "${ARCHITECTURES[@]}"; do
+        if [[ -f "$REPO_DIR/$arch/Packages" ]]; then
+            cat "$REPO_DIR/$arch/Packages" >> "$REPO_DIR/Packages"
+        fi
+    done
+    gzip -9 -kf "$REPO_DIR/Packages"
+    if [[ "$GENERATE_XZ" == "true" ]] && command -v xz >/dev/null 2>&1; then
+        xz -9 -kf "$REPO_DIR/Packages"
+    else
+        rm -f "$REPO_DIR/Packages.xz"
+    fi
+}
+
 generate_release() {
     local arch
     local file
 
     echo "Generating Release file..."
+    # Date must be UTC. apt answers a local offset (what `date -R` prints) with
+    # "W: Invalid 'Date' entry in Release file", which silently disables Valid-Until style checks.
+    # The format below matches what apt-ftparchive itself emits. Note that nothing may be commented
+    # inside the heredoc: a heredoc body is literal file content, and `#` lines here end up inside
+    # the Release file, where apt has no concept of a comment - and a `$(...)` in such a comment gets
+    # expanded into it as well.
     cat > "$REPO_DIR/Release" <<EOF_RELEASE
 Origin: Termux-Kotlin
 Label: Termux-Kotlin
@@ -99,7 +130,7 @@ Codename: termux-kotlin
 Architectures: aarch64 arm x86_64 i686
 Components: main
 Description: Termux-Kotlin Package Repository
-Date: $(date -R)
+Date: $(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S UTC')
 SHA256:
 EOF_RELEASE
 
@@ -112,6 +143,16 @@ EOF_RELEASE
                     "$file" >> "$REPO_DIR/Release"
             fi
         done
+    done
+
+    # The flat root index, so a device can use one line for every architecture.
+    for file in "Packages" "Packages.gz" "Packages.xz"; do
+        if [[ -f "$REPO_DIR/$file" ]]; then
+            printf ' %s %s %s\n' \
+                "$(sha256sum "$REPO_DIR/$file" | cut -d' ' -f1)" \
+                "$(file_size "$REPO_DIR/$file")" \
+                "$file" >> "$REPO_DIR/Release"
+        fi
     done
 
     rm -f "$REPO_DIR/Release.gpg" "$REPO_DIR/InRelease"
@@ -134,6 +175,7 @@ for arch in "${ARCHITECTURES[@]}"; do
     generate_packages "$arch"
 done
 
+generate_root_packages
 generate_release
 
 echo "Repository generated successfully."

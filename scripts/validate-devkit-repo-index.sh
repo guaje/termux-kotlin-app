@@ -138,4 +138,83 @@ for arch in "${ARCHITECTURES[@]}"; do
     echo "Validated termux-devkit $EXPECTED_VERSION for $arch."
 done
 
+# The root index, which is the one a device should be pointed at. Everything below is the contract
+# apt actually relies on, measured on a handset rather than assumed: apt fetches only the index files
+# that Release advertises, treats a suite ending in ./ as a flat repository, and resolves downloads
+# as URI + Filename. So Filename must resolve from the repository root, not from an architecture
+# directory, or apt fetches a good index and then asks for repo/aarch64/aarch64/foo.deb and 404s.
+root_packages="$REPO_DIR/Packages"
+if [[ ! -f "$root_packages" ]]; then
+    echo "ERROR: Missing root index: $root_packages (a device cannot use one URI for all arches without it)" >&2
+    exit 1
+fi
+if [[ ! -f "$root_packages.gz" ]]; then
+    echo "ERROR: Missing compressed root index: $root_packages.gz" >&2
+    exit 1
+fi
+if ! gzip -cd "$root_packages.gz" | cmp -s - "$root_packages"; then
+    echo "ERROR: $root_packages.gz does not match $root_packages" >&2
+    exit 1
+fi
+
+# apt discovers index files from Release; an unadvertised root index is never fetched, and the
+# device reports "does not seem to provide it (sources.list entry misspelt?)".
+if ! grep -q ' Packages$' "$REPO_DIR/Release"; then
+    echo "ERROR: Release does not advertise Packages, so apt will never fetch it" >&2
+    exit 1
+fi
+if ! grep -q ' Packages.gz$' "$REPO_DIR/Release"; then
+    echo "ERROR: Release does not advertise Packages.gz, so apt will never fetch it" >&2
+    exit 1
+fi
+# apt refuses a Date with a local offset: "W: Invalid 'Date' entry in Release file".
+if ! grep -q '^Date: .* UTC$' "$REPO_DIR/Release"; then
+    echo "ERROR: Release Date is not UTC, which apt reports as an invalid Date entry" >&2
+    exit 1
+fi
+# Release has no concept of comments. This check exists because a comment written inside the
+# generate-repo.sh heredoc lands in the published file verbatim, and apt then reports the Date as
+# invalid even though the Date itself is fine.
+if grep -q '^#' "$REPO_DIR/Release"; then
+    echo "ERROR: Release contains '#' lines; apt has no comments and rejects the surrounding fields" >&2
+    exit 1
+fi
+
+for arch in "${ARCHITECTURES[@]}"; do
+    if [[ ! -f "$REPO_DIR/$arch/Packages" ]]; then
+        continue
+    fi
+    if ! awk -v RS='' -v arch="$arch" '
+        $0 ~ /(^|\n)Package: termux-devkit(\n|$)/ && $0 ~ "(^|\\n)Architecture: " arch "(\\n|$)" { found++ }
+        END { exit found == 1 ? 0 : 1 }
+    ' "$root_packages"; then
+        echo "ERROR: root index is missing exactly one termux-devkit stanza for $arch" >&2
+        exit 1
+    fi
+done
+
+# Every Filename must exist relative to the repository root, which is where a single-root URI sends
+# apt to look for it.
+while read -r filename; do
+    if [[ ! -f "$REPO_DIR/$filename" ]]; then
+        echo "ERROR: root index resolves $filename against the repository root, and it is not there" >&2
+        exit 1
+    fi
+done < <(awk -v RS='' -v FS='\n' '/Package: termux-devkit/ { for (i = 1; i <= NF; i++) if ($i ~ /^Filename: /) { sub("^Filename: ", "", $i); print $i } }' "$root_packages")
+
+# The root index is a concatenation of the per-architecture ones, so a device and a per-arch reader
+# can never disagree about what is published.
+cat_root="$temp_dir/root-concat"
+: > "$cat_root"
+for arch in "${ARCHITECTURES[@]}"; do
+    if [[ -f "$REPO_DIR/$arch/Packages" ]]; then
+        cat "$REPO_DIR/$arch/Packages" >> "$cat_root"
+    fi
+done
+if ! cmp -s "$cat_root" "$root_packages"; then
+    echo "ERROR: $root_packages is not the concatenation of the per-architecture indexes" >&2
+    exit 1
+fi
+
+echo "Validated root index: $(grep -c '^Package: ' "$root_packages") stanzas, resolvable from one URI."
 echo "Repository termux-devkit indexes are valid."

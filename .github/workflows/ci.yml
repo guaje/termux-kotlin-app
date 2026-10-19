@@ -627,6 +627,17 @@ jobs:
             test -s "pages/repo/$arch/Packages.gz"
           done
           test -s pages/repo/Release
+          # The root index is what lets one URI serve every architecture (see generate_root_packages
+          # in scripts/generate-repo.sh). It must exist, carry all four builds, and be advertised in
+          # Release, because apt only fetches the index files Release names.
+          test -s pages/repo/Packages
+          test -s pages/repo/Packages.gz
+          test "$(grep -c '^Package: termux-devkit$' pages/repo/Packages)" -eq 4
+          grep -q ' Packages$' pages/repo/Release
+          # apt rejects a Release whose Date carries a local offset with "Invalid 'Date' entry".
+          grep -q '^Date: .* UTC$' pages/repo/Release
+          # A '#' inside the generate-repo.sh heredoc is published verbatim, and apt has no comments.
+          ! grep -q '^#' pages/repo/Release
           ./scripts/validate-repo-index.sh pages/repo
           ./scripts/validate-devkit-repo-index.sh pages/repo
 
@@ -634,23 +645,36 @@ jobs:
         run: |
           set -euo pipefail
           # Derived from the repository running the workflow, so the feed URL cannot silently point
-          # somewhere else. One line rather than four: pasting four sources leaves apt complaining
-          # about the three that do not match the device.
-          owner="$(printf '%s' "${GITHUB_REPOSITORY%%/*}" | tr '[:upper:]' '[:lower:]')"
-          repo="${GITHUB_REPOSITORY##*/}"
+          # somewhere else. GITHUB_REPOSITORY is used verbatim rather than lowercased: the raw host
+          # treats paths case-sensitively, so a lowercased guess could 404.
+          #
+          # Two things about this URL were measured on a handset rather than assumed:
+          #
+          # * Host is raw.githubusercontent.com, not <owner>.github.io. This repository's owner has a
+          #   custom Pages domain, so every <owner>.github.io/... URL 301-redirects to it and the
+          #   project paths 404 there. The raw host serves the gh-pages branch directly, and apt on
+          #   the handset fetched indexes from it over HTTPS.
+          # * The URI is the repository root with a trailing ./. apt resolves flat-repository
+          #   downloads as URI + Filename, and our Filename is root-relative ("aarch64/foo.deb").
+          #   Pointing at repo/aarch64/ fetched a perfectly good index and then asked for
+          #   repo/aarch64/aarch64/foo.deb, which 404s. One root URI therefore serves every
+          #   architecture, and apt drops foreign-arch stanzas on its own, so no arch= option is
+          #   needed and no device ever sees four sources of which three do not match.
           cat > pages/repo/sources.list.template <<'TEMPLATE'
           # Termux-Kotlin package feed (unsigned, so [trusted=yes] is required).
           #
           # Install in one command on the device:
-          #   echo "deb [trusted=yes] __BASE__/$(dpkg --print-architecture)/ ./" \
+          #   echo "deb [trusted=yes] __BASE__/ ./" \
           #     > "$PREFIX/etc/apt/sources.list.d/termux-kotlin.list"
           #   pkg update
           #
-          # Or write the line yourself, using the architecture reported by
-          # dpkg --print-architecture: aarch64, arm, x86_64 or i686.
-          deb [trusted=yes] __BASE__/ARCH/ ./
+          # That single line is the whole feed for every architecture: the index at the root lists
+          # all four builds, each tagged with its Architecture, and apt ignores the ones that are not
+          # this device. Do not append the architecture to the URI; downloads are resolved relative to
+          # it, so doing so asks for repo/aarch64/aarch64/foo.deb and 404s.
+          deb [trusted=yes] __BASE__/ ./
           TEMPLATE
-          sed -i "s|__BASE__|https://${owner}.github.io/${repo}/repo|g" pages/repo/sources.list.template
+          sed -i "s|__BASE__|https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/gh-pages/repo|g" pages/repo/sources.list.template
 
       - name: Publish pages branch
         env:
@@ -822,12 +846,16 @@ jobs:
           
           Configure sources.list (the feed is unsigned, so [trusted=yes] is required):
           \`\`\`
-          deb [trusted=yes] https://<owner>.github.io/<repo>/repo/<arch>/ ./
+          deb [trusted=yes] https://raw.githubusercontent.com/<owner>/<repo>/gh-pages/repo/ ./
           \`\`\`
 
-          Substitute <owner>/<repo> with ${{ github.repository }} (owner in lower case, as GitHub
-          Pages serves it) and <arch> with the device's dpkg --print-architecture. The exact line
-          for this repository is published at
+          One line covers every architecture: the index at the repository root lists all four builds
+          and apt drops the stanzas that are not this device. Substitute <owner>/<repo> with
+          ${{ github.repository }} verbatim (raw paths are case-sensitive) and keep the trailing ./.
+          Do not append the architecture to the URI - downloads resolve relative to it, so that asks
+          for repo/aarch64/aarch64/foo.deb and 404s. The host is raw.githubusercontent.com rather
+          than <owner>.github.io because a custom Pages domain redirects project paths away. The exact
+          line for this repository is published at
           https://github.com/${{ github.repository }}/blob/gh-pages/repo/sources.list.template
           
           ---
