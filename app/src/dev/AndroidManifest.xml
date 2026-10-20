@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Dev-only manifest overlay: REQUEST_INSTALL_PACKAGES, declared here and nowhere else, so a release
+  build cannot hold it.
+
+  This permission is not held to install anything silently. It is held because the platform's own
+  installer refuses to run a confirmation flow for an app that may not install packages. Measured both
+  ways on the handset with identical code, identical apk and identical signing:
+
+    declared and allowed  -> session commits, status STATUS_PENDING_USER_ACTION, and
+                             com.android.packageinstaller/.PackageInstallerActivity comes up with
+                             "Do you want to update this app?"; tapping Update replaces the app.
+    not declared          -> session commits, status STATUS_PENDING_USER_ACTION, an installer component
+                             resolves, startActivity() does not throw, and no dialog is ever shown. The
+                             session then sits unanswered until the platform abandons it.
+
+  The failure mode of the undeclared case is silent, which is why the coordinator refuses to stage
+  without the right rather than reporting a confirmation that will never appear.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+</manifest>
