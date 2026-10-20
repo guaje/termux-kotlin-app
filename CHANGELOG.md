@@ -49,6 +49,7 @@
 ## [Unreleased]
 
 ### Changes
+- `termux-ship` asks the running app what it is before recording an attempt, so the ledger's `fromVersionCode` can no longer describe a build that was already replaced.
 - Bundle OpenSSH for fresh offline installs and supervise a fixed shared ssh-agent socket across terminal and tmux sessions.
 - Add an opt-in Background reliability settings screen, battery-optimization and phantom-process warnings, and recovery documentation.
 - The terminal service is now restarted by Android when its process is killed, takes over the sessions that are still alive and stops itself once nothing is running any more.

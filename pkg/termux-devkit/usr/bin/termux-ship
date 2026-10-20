@@ -335,12 +335,30 @@ esac
 
 # G3 - host facts. Without them every later gate is a guess, and a guess here is
 # made against a running system holding work nobody can recreate.
+#
+# Refreshed from the running app before anything reads the file. host.json is written by the app, so
+# after a replacement it still describes the build that *was* installed, and PREPARE copied that into
+# the ledger's fromVersionCode: an attempt started after the app had already moved was recorded as
+# coming from a build that was no longer on the device. --recover asks the live app for the same reason
+# (#39); PREPARE was the one place in this loop still trusting the old copy. The refresh is best effort
+# - a host that cannot be reached has to fall through to the message below that says so out loud - and a
+# disagreement is reported instead of applied silently, because a stale file is itself a fact worth
+# seeing.
+refresh_note=""
+if command -v termux-reload >/dev/null 2>&1; then
+    before_code=$(host_fact versionCode)
+    termux-reload --scope devkit --quiet >/dev/null 2>&1 || true
+    after_code=$(host_fact versionCode)
+    if [ -n "$before_code" ] && [ -n "$after_code" ] && [ "$before_code" != "$after_code" ]; then
+        refresh_note=", refreshed from the running app: host.json said $before_code"
+    fi
+fi
 if [ -f "$HOST_FACTS" ] && [ -n "$(host_fact versionCode)" ] && [ -n "$(host_fact bootId)" ]; then
     installed_code=$(host_fact versionCode)
     host_boot=$(host_fact bootId)
     host_signer=$(host_fact signerSha256)
     host_abi=$(host_fact abi)
-    pass "host facts present: running versionCode $installed_code, abi $host_abi"
+    pass "host facts present: running versionCode $installed_code, abi $host_abi${refresh_note:+$refresh_note (now $installed_code)}"
 else
     installed_code=""; host_boot=""; host_signer=""; host_abi=""
     fail "no usable host.json at $HOST_FACTS - the app writes it when it starts, and every gate below needs it"
