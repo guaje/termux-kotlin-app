@@ -177,13 +177,18 @@ object DevKitShipPolicy {
         } else {
             null
         }
-        val claimMismatch = if (claims.abis.isNotEmpty() && claims.abis != candidate.nativeAbis) {
-            reject(
-                "the caller claimed ABIs ${claims.abis.joinToString()} but the apk carries " +
-                    "${candidate.nativeAbis.joinToString().ifEmpty { "none" }}"
-            )
-        } else {
+        // A claim about ABIs states what the caller believes the apk covers, not the complete set it
+        // carries: saying "this apk has arm64-v8a" is true of a universal build that also carries
+        // armeabi-v7a, x86 and x86_64. Comparing the two lists for equality refused exactly the builds
+        // most worth shipping, which is how this was caught - on the handset, not in review.
+        val unclaimed = claims.abis.filterNot { candidate.nativeAbis.contains(it) }
+        val claimMismatch = if (unclaimed.isEmpty()) {
             null
+        } else {
+            reject(
+                "the caller claimed the apk carries ${unclaimed.joinToString()} but it does not; the " +
+                    "apk carries ${candidate.nativeAbis.joinToString().ifEmpty { "no native code" }}"
+            )
         }
         return missingAbi ?: claimMismatch
     }

@@ -4,7 +4,6 @@ import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageInstaller
 import com.termux.BuildConfig
 import com.termux.shared.logger.Logger
 
@@ -34,10 +33,7 @@ class DevKitShipReceiver : BroadcastReceiver() {
 
         when (intent.action) {
             ACTION_SHIP -> handleShip(context, intent)
-            ACTION_SHIP_RESULT -> DevKitShipCoordinator(context).recordInstallerResult(
-                intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE),
-                intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
-            )
+            ACTION_SHIP_RESULT -> DevKitShipCoordinator(context).recordInstallerResult(intent!!)
             else -> Logger.logWarn(LOG_TAG, "ignoring action ${intent.action}")
         }
     }
