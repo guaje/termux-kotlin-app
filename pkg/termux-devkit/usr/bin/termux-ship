@@ -27,6 +27,10 @@
 #   --backup-dir DIR        Where termux-backup-prefix writes.
 #                           Default /sdcard/Download/termux-backups.
 #   --prepare-only          Record PREPARED and stop. Do not touch the app.
+#   --confirm               Ask the endpoint to stage the apk and hand the system its
+#                           confirmation dialog. Without it the endpoint only verifies:
+#                           that is the default because verification has no side effects
+#                           and an unexpected confirmation dialog is worse than none.
 #   --wait SECONDS          How long to wait for the app's ship status file.
 #                           Default 10.
 #   --status                Print facts and any open attempt. Writes nothing.
@@ -41,7 +45,7 @@
 # Exit codes:
 #   0  attempt prepared/dispatched as asked, or open attempt reconciled
 #   1  dispatch could not be delivered
-#   2  delivered and the app reported failure
+#   2  delivered and the app reported failure, or answered something unrecognised
 #   3  delivered and the app did not answer before the timeout
 #   4  an attempt is already open, or one is open and needs --recover
 #   5  preflight refused (the reason names the gate)
@@ -70,7 +74,11 @@ CURRENT="$STATE_DIR/ship-current.json"
 GENERATION_FILE="$STATE_DIR/ship-generation"
 STATUS_FILE="${TERMUX_DEVKIT_SHIP_STATUS_FILE:-$STATE_DIR/last-ship.json}"
 BACKUP_DIR="${TERMUX_BACKUP_DIR:-/sdcard/Download/termux-backups}"
-ACTION="$PACKAGE.app.devkit.ship"
+# One namespace, used for the action, the component and every extra name. The extras
+# are fully qualified on purpose: that is what DevKitShipReceiver reads, and a short
+# name would arrive as "not provided" rather than as an error.
+NS="$PACKAGE.app.devkit"
+ACTION="$NS.ship"
 RECEIVER="$PACKAGE/.app.devkit.DevKitShipReceiver"
 
 APK=""
@@ -82,6 +90,7 @@ ALLOW_UNVERIFIED_SIGNER=0
 ALLOW_EQUAL_VERSION=0
 REQUIRE_BACKUP_HOURS=24
 PREPARE_ONLY=0
+CONFIRM=0
 WAIT_SECONDS=10
 MODE="ship"
 
@@ -104,6 +113,7 @@ while [ $# -gt 0 ]; do
         --require-backup) REQUIRE_BACKUP_HOURS="$2"; shift 2 ;;
         --backup-dir) BACKUP_DIR="$2"; shift 2 ;;
         --prepare-only) PREPARE_ONLY=1; shift ;;
+        --confirm) CONFIRM=1; shift ;;
         --wait) WAIT_SECONDS="$2"; shift 2 ;;
         --status) MODE="status"; shift ;;
         --recover) MODE="recover"; shift ;;
@@ -417,23 +427,30 @@ if [ "$PREPARE_ONLY" -eq 1 ]; then
     exit 0
 fi
 
-# Hand off. The endpoint is the app's own receiver: a foreign uid cannot reach it,
-# and the app performs the PackageInstaller session as itself.
+# Hand off. The endpoint is the app's own receiver: a foreign uid cannot reach it, and
+# the app - not this script - reads the apk through the package manager, which is the
+# only way to check what the file really contains.
 if ! command -v termux-am >/dev/null 2>&1; then
     transition "FAILED" "$generation" "$extra,\"reason\":\"termux-am is not installed, so the request could not be delivered\"" >/dev/null
     echo "DISPATCH FAILED: termux-am is not installed."
     exit 1
 fi
 
+# The endpoint stamps this token into its status file, so an answer can be matched to
+# this request instead of to "whatever the last answer happened to be".
+REQUEST_ID="ship-$generation-$(date +%s)"
 before_generation=""
 [ -f "$STATUS_FILE" ] && before_generation=$(read_field "$STATUS_FILE" generation)
 
-if ! termux-am broadcast -n "$RECEIVER" -a "$ACTION" \
-        --es apk "$APK" \
-        --esa abi "${ABI:-unknown}" \
-        --ei version_code "$VERSION_CODE" \
-        --es signer_sha256 "${SIGNER:-}" \
-        --el prepared_at "$(date +%s)" 2>/dev/null; then
+set -- \
+    --es "$NS.request_id" "$REQUEST_ID" \
+    --es "$NS.apk" "$APK" \
+    --ei "$NS.claimed_version_code" "$VERSION_CODE" \
+    --es "$NS.claimed_signer" "${SIGNER:-}"
+[ -n "${ABI:-}" ] && set -- "$@" --esa "$NS.claimed_abis" "$(printf '%s' "$ABI" | tr ',' ' ')"
+[ "$CONFIRM" -eq 1 ] && set -- "$@" --ez "$NS.confirm" true
+
+if ! termux-am broadcast -n "$RECEIVER" -a "$ACTION" "$@" 2>/dev/null; then
     transition "FAILED" "$generation" "$extra,\"reason\":\"the endpoint refused the broadcast\"" >/dev/null
     echo "DISPATCH FAILED: termux-am refused to deliver to $RECEIVER."
     exit 1
@@ -444,20 +461,37 @@ echo "DISPATCHED generation $generation to $RECEIVER"
 
 elapsed=0
 while [ "$elapsed" -lt "$WAIT_SECONDS" ]; do
-    if [ -f "$STATUS_FILE" ]; then
-        answered=$(read_field "$STATUS_FILE" generation)
-        if [ -n "$answered" ] && [ "$answered" != "$before_generation" ]; then
-            accepted=$(read_field "$STATUS_FILE" accepted)
-            reason=$(read_field "$STATUS_FILE" reason)
-            if [ "$accepted" = "true" ]; then
-                echo "Endpoint accepted generation $answered. The replacement kills this process group, so this is as far as a live caller sees."
-                echo "After the app comes back: termux-ship --recover"
-                exit 0
-            fi
+    if [ -f "$STATUS_FILE" ] && [ "$(read_field "$STATUS_FILE" requestId)" = "$REQUEST_ID" ]; then
+        accepted=$(read_field "$STATUS_FILE" accepted)
+        action=$(read_field "$STATUS_FILE" action)
+        reason=$(read_field "$STATUS_FILE" reason)
+        if [ "$accepted" != "true" ]; then
             transition "FAILED" "$generation" "$extra,\"reason\":\"$(json_escape "${reason:-endpoint reported failure}")\"" >/dev/null
             echo "ENDPOINT REFUSED: ${reason:-no reason given}"
             exit 2
         fi
+        case "$action" in
+            confirming)
+                echo "Endpoint STAGED the apk and handed the system its confirmation: $reason"
+                echo "Accept the dialog to replace the app - this process group dies if you do."
+                echo "Then run: termux-ship --recover"
+                exit 0
+                ;;
+            verified)
+                # Nothing was staged, so nothing can land from this attempt. Close it now with the
+                # reason attached; leaving it open would make --recover guess at a reboot boundary
+                # that has nothing to do with it.
+                transition "ABANDONED" "$generation" "$extra,\"reason\":\"endpoint verified only; rerun with --confirm to stage the apk\"" >/dev/null
+                echo "Endpoint VERIFIED the apk without staging it: $reason"
+                echo "Nothing was installed and the attempt is closed. Rerun with --confirm to stage it."
+                exit 0
+                ;;
+            *)
+                transition "ABANDONED" "$generation" "$extra,\"reason\":\"endpoint answered an unrecognised action: $(json_escape "${action:-none}")\"" >/dev/null
+                echo "ENDPOINT ANSWERED AN UNRECOGNISED ACTION: ${action:-none} ($reason)"
+                exit 2
+                ;;
+        esac
     fi
     sleep 1
     elapsed=$((elapsed + 1))
