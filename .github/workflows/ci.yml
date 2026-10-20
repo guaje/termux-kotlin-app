@@ -474,7 +474,10 @@ jobs:
             echo "configured=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > app/termux-release.keystore
+          # A relative storeFile resolves against the directory of the signing.properties that declared it,
+          # so the keystore belongs beside that file (repository root), not under app/. Writing it into app/
+          # asks for <root>/termux-release.keystore and fails validateSigning<Variant>.
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > termux-release.keystore
           # Written to the repository root because that is a candidate in the precedence chain that
           # gradle/release-signing.gradle walks, and both modules now walk that one script: it is why
           # the two APKs cannot come out with different certificates from here on.
@@ -872,7 +875,10 @@ jobs:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
           if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "$KEYSTORE_BASE64" | base64 -d > app/termux-release.keystore
+            # A relative storeFile resolves against the directory of the signing.properties that declared it,
+            # so the keystore belongs beside that file (repository root), not under app/ - writing it into app/
+            # asks for <root>/termux-release.keystore and fails validateSigning<Variant>.
+            echo "$KEYSTORE_BASE64" | base64 -d > termux-release.keystore
           else
             echo "Warning: KEYSTORE_BASE64 not set, will build unsigned APK"
           fi

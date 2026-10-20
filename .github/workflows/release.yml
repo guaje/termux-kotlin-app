@@ -124,7 +124,11 @@ jobs:
               exit 1
             fi
           done
-          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > app/termux-release.keystore
+          # A relative storeFile resolves against the directory of the signing.properties that declared it, so
+          # the keystore belongs beside that file (repository root), not under app/ - writing it into app/ asks
+          # for <root>/termux-release.keystore and fails validateSigning<Variant>. release.yml is disabled, which
+          # is the only reason this mismatch was never reported by a build.
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > termux-release.keystore
           cat > signing.properties <<EOF
           storeFile=termux-release.keystore
           storePassword=$KEYSTORE_PASSWORD
