@@ -622,7 +622,10 @@ jobs:
 
           for arch in aarch64 arm x86_64 i686; do
             test -f "pages/repo/$arch/termux-api_1%3a0.59.1-1_${arch}.deb"
-            test -f "pages/repo/$arch/termux-devkit_0.1.0_${arch}.deb"
+            # Not a literal version: the deb version now carries a build stamp so that apt can actually
+            # upgrade it, so assert exactly one devkit artefact per architecture and let the validator
+            # check that index, control file and filename agree on which build that is.
+            test "$(find "pages/repo/$arch" -maxdepth 1 -name "termux-devkit_*_${arch}.deb" | wc -l)" -eq 1
             test -s "pages/repo/$arch/Packages"
             test -s "pages/repo/$arch/Packages.gz"
           done

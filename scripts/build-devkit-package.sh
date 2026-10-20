@@ -22,7 +22,14 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PKG_DIR="$PROJECT_ROOT/pkg/termux-devkit"
 WORK_DIR="$PROJECT_ROOT/build/termux-devkit-deb"
 OUTPUT_DIR="${TERMUX_DEBKIT_OUTPUT_DIR:-$PROJECT_ROOT/repo}"
-VERSION="${TERMUX_DEBKIT_VERSION:-0.1.0}"
+# The version must change when the content changes. This was pinned at 0.1.0, which meant every build
+# the feed published was the same version as the one already installed, so "apt-get upgrade
+# termux-devkit" could only ever answer that the newest version was in place: the feed could deliver a
+# fix and the device would decline it unless the user forced --reinstall. A UTC minute stamp lands in
+# the dpkg revision field, which is a single run of digits and therefore compared numerically, so newer
+# builds really do sort above older ones. Override it to pin a release.
+BUILD_STAMP="$(date -u +%Y%m%d%H%M)"
+VERSION="${TERMUX_DEBKIT_VERSION:-0.1.0+${BUILD_STAMP}}"
 MAINTAINER="Termux-Kotlin <termux-kotlin@localhost>"
 STAGE_ASSETS=0
 ARCHES=""

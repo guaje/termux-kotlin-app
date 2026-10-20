@@ -19,7 +19,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${1:-$SCRIPT_DIR/../repo}"
-EXPECTED_VERSION="${TERMUX_DEBKIT_VERSION:-0.1.0}"
+# Not a default this time. The published version carries a build stamp, so asserting a constant here
+# would only ever pass on the day it was written; with nothing set, the version is checked against the
+# artefact filename instead, which is the stronger assertion because it catches an index that
+# advertises one build while pointing at another.
+EXPECTED_VERSION="${TERMUX_DEBKIT_VERSION:-}"
 PREFIX="/data/data/com.termux/files/usr"
 COMMANDS=(termux-reload termux-backup-prefix termux-restore-prefix termux-ship)
 ARCHITECTURES=(aarch64 arm x86_64 i686)
@@ -69,14 +73,23 @@ for arch in "${ARCHITECTURES[@]}"; do
     }
 
     version=$(field Version)
-    if [[ "$version" != "$EXPECTED_VERSION" ]]; then
-        echo "ERROR: termux-devkit in $packages has Version: $version; expected $EXPECTED_VERSION" >&2
-        exit 1
-    fi
-
     filename=$(field Filename)
     if [[ -z "$filename" || "$filename" = /* || "$filename" == *".."* || "$filename" != "$arch/"* ]]; then
         echo "ERROR: Invalid termux-devkit Filename in $packages: $filename" >&2
+        exit 1
+    fi
+
+    # The version apt compares on upgrade has to be readable from the artefact name, since it is no
+    # longer a constant: <package>_<version>_<arch>.deb, which is also the name dpkg insists on.
+    base=${filename##*/}
+    filename_version=${base#termux-devkit_}
+    filename_version=${filename_version%_${arch}.deb}
+    if [[ "$version" != "$filename_version" ]]; then
+        echo "ERROR: termux-devkit in $packages has Version: $version but the file is $base" >&2
+        exit 1
+    fi
+    if [[ -n "$EXPECTED_VERSION" && "$version" != "$EXPECTED_VERSION" ]]; then
+        echo "ERROR: termux-devkit in $packages has Version: $version; expected $EXPECTED_VERSION" >&2
         exit 1
     fi
 
@@ -135,7 +148,7 @@ for arch in "${ARCHITECTURES[@]}"; do
         fi
     done
 
-    echo "Validated termux-devkit $EXPECTED_VERSION for $arch."
+    echo "Validated termux-devkit $version for $arch."
 done
 
 # The root index, which is the one a device should be pointed at. Everything below is the contract
