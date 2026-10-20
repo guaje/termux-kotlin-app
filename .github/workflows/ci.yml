@@ -509,9 +509,17 @@ jobs:
           set -euo pipefail
           BUILD_TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
           APKSIGNER="$BUILD_TOOLS/apksigner"
-          mapfile -t APKS < <(find termux-anchor/build/outputs/apk -type f -name '*.apk' | sort)
+          # The dev variant only, because that is the one this branch installs. The unqualified
+          # "assembleDebug" near the top of this job builds every module, so a debug-signed
+          # termux-anchor-debug.apk also lands under outputs/apk/; asserting over the whole tree fails a
+          # build that is entirely correct, which is what this step did the first time it ran. Worth
+          # recording what that debug artifact actually is: the permission between the two apps is
+          # signature-level and granted only to the release signer, so installing it yields an anchor that
+          # hears nothing at all - a silent supervisor with a valid signature from the wrong key. It belongs
+          # in the debug artifact pile and nowhere near a handset.
+          mapfile -t APKS < <(find termux-anchor/build/outputs/apk/dev -type f -name '*.apk' | sort)
           if [[ ${#APKS[@]} -eq 0 ]]; then
-            echo "No anchor APK was produced to check the certificate of" >&2
+            echo "No anchor dev APK was produced to check the certificate of" >&2
             exit 1
           fi
           for apk in "${APKS[@]}"; do
