@@ -16,9 +16,33 @@
 
   The failure mode of the undeclared case is silent, which is why the coordinator refuses to stage
   without the right rather than reporting a confirmation that will never appear.
+
+  com.termux.anchor.permission.CONTROL is here for the same reason the install right is: it is the
+  signature-level permission the supervisor anchor APK guards its heartbeat receiver with, so a build
+  that does not declare it cannot report to the anchor at all. Declaring it costs a release build nothing
+  except the truth - the release manifest would then be claiming a relationship with a package that is not
+  in the release train - and DevKitHeartbeat does not send anything unless BuildConfig.DEVKIT_HOST, which
+  is false outside the dev variant anyway. Keeping it in this overlay is what makes "a release build never
+  mentions the anchor" true of the manifest as well as of the code path.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!-- Held so that DevKitHeartbeat's com.termux.anchor.HEARTBEAT broadcast is delivered. Granted by the
+         platform on install because both APKs are signed with the same release key, which is the whole
+         authentication: see termux-anchor/src/main/AndroidManifest.xml. -->
+    <uses-permission android:name="com.termux.anchor.permission.CONTROL" />
+
+    <!--
+      Package visibility for the heartbeat in DevKitHeartbeat. Today this changes nothing measurable:
+      filtering applies to apps targeting SDK 30+, and this app is held at 28, so getPackageInfo already
+      answered for the anchor on the handset. It is declared anyway because the failure without it is the
+      worst shape of failure this project has seen - the day targetSdk rises, the anchor still looks
+      absent, the heartbeat quietly never starts, and supervision stops existing with nothing in any log.
+    -->
+    <queries>
+        <package android:name="com.termux.anchor" />
+    </queries>
 
 </manifest>

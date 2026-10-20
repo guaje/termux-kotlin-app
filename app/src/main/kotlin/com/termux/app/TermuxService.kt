@@ -14,7 +14,9 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import com.termux.BuildConfig
 import com.termux.R
+import com.termux.app.devkit.DevKitHeartbeat
 import com.termux.app.event.SystemEventReceiver
 import com.termux.app.reliability.ReliabilityWarningNotifier
 import com.termux.app.reliability.TermuxServiceStopPolicy
@@ -107,6 +109,15 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
     private var mAppPreferences: TermuxAppSharedPreferences? = null
 
     /**
+     * The reporter for the supervisor anchor APK, or null on every build that may not speak to it.
+     *
+     * Only ever constructed when [BuildConfig.DEVKIT_HOST], which is true of the `dev` variant alone, and
+     * only ever useful when `com.termux.anchor` is installed on the device. See [DevKitHeartbeat] for what
+     * it is for and why the anchor has to be a separate APK with its own uid.
+     */
+    private var anchorHeartbeat: DevKitHeartbeat? = null
+
+    /**
      * The preferences of the app, built once per instance of the service.
      *
      * Building them asks the package manager for the package context of Termux, which is a binder call,
@@ -161,6 +172,14 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
         // already met, and it completes before TermuxActivity.onServiceConnected() can run, so the
         // activity does not create a duplicate first session.
         restoreSessionsFromSnapshot()
+
+        // Report to the supervisor anchor if this build is allowed to and the anchor is there. Last, so
+        // that a heartbeat can never arrive before the service has its foreground notification, its
+        // wake locks and its restored sessions in place: the anchor is entitled to conclude from the
+        // first beat that this app is fully up.
+        if (BuildConfig.DEVKIT_HOST) {
+            anchorHeartbeat = DevKitHeartbeat(this).also { it.start() }
+        }
     }
 
     @SuppressLint("Wakelock")
@@ -262,6 +281,11 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
         }
 
         SystemEventReceiver.unregisterPackageUpdateEvents(this)
+
+        // Stop reporting, so that an anchor which outlives this service does not keep being told the app
+        // is alive by a handler in a service that is going away.
+        anchorHeartbeat?.stop()
+        anchorHeartbeat = null
 
         runStopForeground()
     }

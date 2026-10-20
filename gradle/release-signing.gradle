@@ -1,0 +1,75 @@
+/*
+ * The release signing configuration, in exactly one place.
+ *
+ * Every APK this repository publishes must carry the same release certificate, and that is not a
+ * packaging nicety. The channel between the app and the supervisor anchor (com.termux.anchor.permission.CONTROL)
+ * is a signature-level permission, which means the sender and the receiver are authenticated by
+ * nothing but their signing key. An anchor signed by a different key is therefore not a weaker
+ * supervisor: it silently never receives a heartbeat, looks healthy, and the pair is worse than the
+ * app alone. Two copies of this resolution logic is exactly how the two certificates would drift
+ * apart without any build ever failing, which is why both modules apply this script.
+ *
+ * Use it from a module's build.gradle, after the android application plugin:
+ *
+ *     apply from: "$rootDir/gradle/release-signing.gradle"
+ *
+ * and then reference `signingConfigs.release` from a build type. When no signing material exists the
+ * config is simply left empty and the APK comes out unsigned rather than the build failing; that is
+ * what lets a random clone build a debug-style variant, and what the certificate pin in
+ * .github/workflows/ exists to catch before anything is published.
+ */
+
+android {
+    signingConfigs {
+        release {
+            // Signing material is resolved outside the checkout so that any clone can produce a
+            // replace-installable APK. Precedence, first hit wins:
+            //   1. TERMUX_RELEASE_* environment variables - CI, and shells that source a
+            //      chezmoi-managed env file, so nothing secret sits in the working tree.
+            //   2. $TERMUX_SIGNING_DIR/signing.properties, then
+            //      ~/.local/share/termux-kotlin/signing/signing.properties - per-user config, host-agnostic.
+            //   3. signing.properties in the repository root - what .github/workflows/release.yml writes.
+            def signingProps = new Properties()
+            def signingPropsDir = null
+            def candidatePropsFiles = []
+            def signingDirEnv = System.getenv('TERMUX_SIGNING_DIR')
+            if (signingDirEnv) {
+                candidatePropsFiles << new File(signingDirEnv, 'signing.properties')
+            }
+            candidatePropsFiles << new File(System.properties['user.home'],
+                '.local/share/termux-kotlin/signing/signing.properties')
+            candidatePropsFiles << rootProject.file('signing.properties')
+            for (candidate in candidatePropsFiles) {
+                if (candidate.exists()) {
+                    candidate.withInputStream { signingProps.load(it) }
+                    signingPropsDir = candidate.parentFile
+                    break
+                }
+            }
+            [
+                'TERMUX_RELEASE_STORE_FILE'    : 'storeFile',
+                'TERMUX_RELEASE_STORE_PASSWORD': 'storePassword',
+                'TERMUX_RELEASE_KEY_ALIAS'     : 'keyAlias',
+                'TERMUX_RELEASE_KEY_PASSWORD'  : 'keyPassword'
+            ].each { envName, propName ->
+                def value = System.getenv(envName)
+                if (value) {
+                    signingProps.setProperty(propName, value)
+                }
+            }
+            if (signingProps.getProperty('storeFile')) {
+                def storeFileValue = signingProps.getProperty('storeFile')
+                def resolvedStoreFile = new File(storeFileValue)
+                // A relative keystore name belongs to whichever properties file declared it, not to the
+                // module directory that happens to be evaluating this script.
+                if (!resolvedStoreFile.absolute && signingPropsDir != null) {
+                    resolvedStoreFile = new File(signingPropsDir, storeFileValue)
+                }
+                storeFile resolvedStoreFile
+                storePassword signingProps.getProperty('storePassword')
+                keyAlias signingProps.getProperty('keyAlias')
+                keyPassword signingProps.getProperty('keyPassword')
+            }
+        }
+    }
+}
