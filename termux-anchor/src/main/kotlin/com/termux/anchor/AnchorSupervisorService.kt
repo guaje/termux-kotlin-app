@@ -121,7 +121,15 @@ class AnchorSupervisorService : Service() {
     ) {
         writtenReason = null
         val outcome = requestTermuxForeground()
-        needsUserRescue = outcome.isFailure
+        // True after every attempt, not only after one that threw. BAL (measured here, razr fold 2026 /
+        // Android 16: "Background activity launch blocked! goo.gle/android-bal ...
+        // callingUidHasVisibleActivity: false, callingUidProcState: FOREGROUND_SERVICE,
+        // resultIfPiCreatorAllowsBal: BAL_BLOCK") refuses this start inside ActivityTaskManager, so
+        // nothing reaches this call site as an exception: with `outcome.isFailure` as the only trigger the
+        // notification kept its calm text while Termux stayed dead and the user was never offered the tap
+        // that would have worked. An unanswered attempt is the state in which a human is needed, and the
+        // next heartbeat from this boot clears the flag in [watching].
+        needsUserRescue = true
 
         // Written either way, and worded to what actually happened. The attempt counter in the state is
         // what the backoff ladder is read from, and a launch the platform refused is an attempt in the
@@ -152,6 +160,19 @@ class AnchorSupervisorService : Service() {
      *
      * So: success here means "requested". The only proof of recovery the anchor accepts is the next
      * heartbeat, and the notification says as much while it waits for one.
+     *
+     * MEASURED ON THE HANDSET, TWICE, WITH OPPOSITE OUTCOMES - do not read a quiet log as success:
+     * - anchor in the foreground (its own activity visible): force-stop at 12:36:55, launch at the 45 s
+     *   window, Termux running again at 12:37:32 with topResumedActivity=com.termux/.app.TermuxActivity.
+     * - anchor in the background, two hours later, screen awake, launcher on top: three attempts at the
+     *   45/90/180 s rungs, every one of them blocked, Termux never came back, and the only thing either
+     *   process logged was the platform line quoted in [attemptRestart].
+     * The difference is the caller's window state, not the intent, and it is the whole restriction on this
+     * design: a background foreground-service may not start an activity. The paths that still work are the
+     * notification's tap-through, which is a user action and therefore exempt, and whatever makes the
+     * anchor exempt on its own - SYSTEM_ALERT_WINDOW is the documented one a normal app can be granted.
+     * Until that is settled, "supervision" means "you will be told, in a notification you can act on", and
+     * not "it comes back by itself".
      */
     private fun requestTermuxForeground(): Result<Unit> = runCatching {
         val launch = packageManager.getLaunchIntentForPackage(AnchorMessages.TERMUX_PACKAGE)
