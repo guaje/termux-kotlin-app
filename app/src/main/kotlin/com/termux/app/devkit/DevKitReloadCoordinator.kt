@@ -10,7 +10,6 @@ import com.termux.shared.logger.Logger
 import com.termux.shared.termux.TermuxConstants.TERMUX_APP.TERMUX_ACTIVITY
 import com.termux.shared.termux.TermuxConstants.TERMUX_PREFIX_DIR_PATH
 import java.io.File
-import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -201,8 +200,10 @@ class DevKitReloadCoordinator(private val context: Context) {
             val certificate = info.signingInfo?.apkContentsSigners?.firstOrNull()
                 ?: info.signingInfo?.signingCertificateHistory?.firstOrNull()
                 ?: return null
-            val digest = MessageDigest.getInstance("SHA-256").digest(certificate.toByteArray())
-            val signer = digest.joinToString("") { "%02x".format(it) }
+            // DevKitDigest rather than "%02x".format(): the format honours the default locale, and a
+            // locale with non-ASCII digits would render a fingerprint that cannot match the same
+            // bytes anywhere else.
+            val signer = DevKitDigest.sha256Hex(certificate.toByteArray()) ?: error("no SHA-256 on this platform")
 
             val flags = info.applicationInfo?.flags ?: 0
             val debuggable = flags.and(ApplicationInfo.FLAG_DEBUGGABLE) != 0

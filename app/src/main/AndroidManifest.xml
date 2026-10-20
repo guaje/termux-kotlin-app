@@ -282,6 +282,19 @@
             </intent-filter>
         </receiver>
 
+        <!-- Devkit ship endpoint: verifies a candidate apk and optionally stages it. Same uid only.
+             It is declared in every build so that termux-ship receives a real refusal instead of a
+             timeout, but DevKitShipReceiver writes nothing unless BuildConfig.DEVKIT_HOST is set.
+             The result action is delivered by the system installer, not by us. -->
+        <receiver
+            android:name=".app.devkit.DevKitShipReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="${TERMUX_PACKAGE_NAME}.app.devkit.ship" />
+                <action android:name="${TERMUX_PACKAGE_NAME}.app.devkit.ship.result" />
+            </intent-filter>
+        </receiver>
+
         <!-- Widget Provider - Simple 1x1 -->
         <receiver
             android:name=".app.widget.TermuxWidgetProvider"
