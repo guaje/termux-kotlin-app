@@ -165,17 +165,27 @@ class DevKitShipPolicyTest {
         assertTrue(reason, reason.contains("could not be parsed"))
     }
 
+    /**
+     * Regression test for the rule this feature shipped with, which compared the claimed ABI list to
+     * the apk's list for equality. A universal apk carries four ABIs, so a caller honestly saying
+     * "this covers arm64-v8a" was refused for describing part of the truth. The handset found this;
+     * the earlier version of this test asserted the wrong rule and passed.
+     */
     @Test
-    fun claimAboutAbisThatDisagreesIsRefused() {
-        val claims = DevKitShipPolicy.Claims(abis = listOf("x86_64"))
+    fun claimingOneAbiOfAUniversalApkIsAccepted() {
+        val universal = listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+        val claims = DevKitShipPolicy.Claims(abis = listOf("arm64-v8a"))
+        assertTrue(DevKitShipPolicy.decide(installed, candidate(nativeAbis = universal), claims).accepted)
+    }
+
+    @Test
+    fun claimAboutAnAbiTheApkDoesNotCarryIsRefused() {
+        val claims = DevKitShipPolicy.Claims(abis = listOf("x86"))
         val reason = refuseReason(
-            DevKitShipPolicy.decide(
-                installed,
-                candidate(nativeAbis = listOf("arm64-v8a", "x86_64")),
-                claims
-            )
+            DevKitShipPolicy.decide(installed, candidate(nativeAbis = listOf("arm64-v8a")), claims)
         )
-        assertTrue(reason, reason.contains("carries"))
+        assertTrue(reason, reason.contains("x86"))
+        assertTrue(reason, reason.contains("does not"))
     }
 
     @Test

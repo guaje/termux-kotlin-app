@@ -256,6 +256,13 @@ case "$MODE" in
         from_code=$(num_field "$CURRENT" fromVersionCode)
         to_code=$(num_field "$CURRENT" toVersionCode)
         boot_at_dispatch=$(read_field "$CURRENT" bootId)
+        # Ask the running app what it is before deciding anything. host.json is written by the app, so
+        # straight after a replacement it still describes the build that *was* installed, and reading
+        # it as it stands would report a finished install as still open. If the app is not reachable
+        # this stays silent and the checks below answer conservatively.
+        if command -v termux-reload >/dev/null 2>&1; then
+            termux-reload --scope devkit --quiet >/dev/null 2>&1 || true
+        fi
         if [ ! -f "$HOST_FACTS" ]; then
             echo "ERROR: cannot reconcile without host.json; the app has not started since the replacement." >&2
             exit 4
@@ -345,7 +352,10 @@ if [ -n "$installed_code" ] && [ -n "$VERSION_CODE" ]; then
 fi
 
 # G5 - signer lineage. Deliberately loud: getting this wrong does not fail safe.
-if [ -z "$SIGNER" ] && [ -z "$ABI" ] && command -v unzip >/dev/null 2>&1 && [ -f "$APK" ] && [ -r "$APK" ]; then
+# What the apk carries is readable from the file, so prefer that over being told. Detection must not
+# depend on any other argument: tying it to --signer being absent meant passing a signer silently
+# disabled the ABI gate, which is the opposite of what a careful caller would expect.
+if [ -z "$ABI" ] && command -v unzip >/dev/null 2>&1 && [ -f "$APK" ] && [ -r "$APK" ]; then
     detected=$(unzip -Z1 "$APK" 'lib/*' 2>/dev/null | sed -n 's|^lib/\([^/]*\)/.*|\1|p' | sort -u | paste -sd, -)
     [ -n "$detected" ] && ABI="$detected"
 fi
