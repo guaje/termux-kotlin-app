@@ -48,6 +48,9 @@ env:
   PACKAGE_NAME: com.termux
   JAVA_VERSION: '17'
   GRADLE_OPTS: '-Dorg.gradle.daemon=false'
+  # The same certificate pinned in release.yml. Both APKs are checked against it here because both are
+  # built here, and the pair only works if the two signers are one signer.
+  RELEASE_CERTIFICATE_SHA256: 'b71c8ff3ce3ce4cb55efd20b34048329721d40fcec540f2cbc9cfb4ee5fb2d63'
 
 jobs:
   # ============================================================
@@ -446,6 +449,107 @@ jobs:
           path: app/build/outputs/apk/debug/*.apk
           retention-days: 30
 
+      # The supervisor anchor (com.termux.anchor) is a second APK, which means a second certificate to
+      # keep aligned with the first. That alignment is its entire authentication: the permission guarding
+      # its heartbeat receiver is signature-level, so an anchor signed by any other key is not a weaker
+      # supervisor, it is a silent one - the app's broadcast is dropped by the platform and nothing on
+      # either side ever says so. Hence: build it here, and assert its signer against the same pin
+      # release.yml holds in RELEASE_CERTIFICATE_SHA256.
+      - name: Configure release signing for the anchor dev APK
+        id: anchor_signing
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$KEYSTORE_BASE64" || -z "$KEYSTORE_PASSWORD" || -z "$KEY_ALIAS" || -z "$KEY_PASSWORD" ]]; then
+            # Fork pull requests never have the secrets. The anchor must still build there, unsigned, so
+            # this reports the absence instead of failing it, and the certificate step below is skipped
+            # rather than quietly passed. It must not be turned into a warning on runs that do have the
+            # secrets: an unsigned anchor installing where a signed one is expected is the failure this
+            # whole block exists to catch.
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A relative storeFile resolves against the directory of the signing.properties that declared it,
+          # so the keystore belongs beside that file (repository root), not under app/. Writing it into app/
+          # asks for <root>/termux-release.keystore and fails validateSigning<Variant>.
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > termux-release.keystore
+          # Written to the repository root because that is a candidate in the precedence chain that
+          # gradle/release-signing.gradle walks, and both modules now walk that one script: it is why
+          # the two APKs cannot come out with different certificates from here on.
+          cat > signing.properties <<EOF
+          storeFile=termux-release.keystore
+          storePassword=$KEYSTORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+
+      # Explicit, and not left to the unqualified assembleDebug above: the anchor is the one module whose
+      # dev variant has to exist for the ship loop to be able to install it next to the app.
+      - name: Build the supervisor anchor APK
+        id: anchor_build
+        run: ./gradlew :termux-anchor:assembleDev --no-daemon
+
+      - name: Upload anchor dev APK
+        uses: actions/upload-artifact@v6
+        with:
+          name: anchor-dev-apk
+          path: termux-anchor/build/outputs/apk/**/*.apk
+          retention-days: 30
+
+      - name: Assert the anchor APK carries the release certificate
+        if: steps.anchor_signing.outputs.configured == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUILD_TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          APKSIGNER="$BUILD_TOOLS/apksigner"
+          # The dev variant only, because that is the one this branch installs. The unqualified
+          # "assembleDebug" near the top of this job builds every module, so a debug-signed
+          # termux-anchor-debug.apk also lands under outputs/apk/; asserting over the whole tree fails a
+          # build that is entirely correct, which is what this step did the first time it ran. Worth
+          # recording what that debug artifact actually is: the permission between the two apps is
+          # signature-level and granted only to the release signer, so installing it yields an anchor that
+          # hears nothing at all - a silent supervisor with a valid signature from the wrong key. It belongs
+          # in the debug artifact pile and nowhere near a handset.
+          mapfile -t APKS < <(find termux-anchor/build/outputs/apk/dev -type f -name '*.apk' | sort)
+          if [[ ${#APKS[@]} -eq 0 ]]; then
+            echo "No anchor dev APK was produced to check the certificate of" >&2
+            exit 1
+          fi
+          for apk in "${APKS[@]}"; do
+            VERIFY="$($APKSIGNER verify --verbose --print-certs "$apk")"
+            SIGNER_COUNT="$(awk -F ': ' '/^Number of signers:/ { print $2; exit }' <<< "$VERIFY")"
+            if [[ "$SIGNER_COUNT" != '1' ]]; then
+              echo "Expected exactly one signer in $apk, got '${SIGNER_COUNT:-unknown}'. apksigner output:" >&2
+              printf '%s\n' "$VERIFY" >&2
+              exit 1
+            fi
+            CERT="$(
+              awk '
+                /certificate SHA-256 digest:/ {
+                  digest = $0
+                  sub(/^.*digest:[[:space:]]*/, "", digest)
+                  gsub(/[[:space:]]/, "", digest)
+                  print tolower(digest)
+                  exit
+                }
+              ' <<< "$VERIFY"
+            )"
+            if [[ "$CERT" != "$RELEASE_CERTIFICATE_SHA256" ]]; then
+              echo "Anchor APK $apk is signed by '${CERT:-nothing}', expected $RELEASE_CERTIFICATE_SHA256" >&2
+              echo "The app and the anchor must be signed by one key: the permission between them is" >&2
+              echo "signature-level, so any other combination leaves the anchor unable to hear the app." >&2
+              exit 1
+            fi
+            echo "$apk is signed by $CERT"
+          done
+
       - name: Collect failure logs
         if: failure()
         run: |
@@ -779,7 +883,10 @@ jobs:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
           if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "$KEYSTORE_BASE64" | base64 -d > app/termux-release.keystore
+            # A relative storeFile resolves against the directory of the signing.properties that declared it,
+            # so the keystore belongs beside that file (repository root), not under app/ - writing it into app/
+            # asks for <root>/termux-release.keystore and fails validateSigning<Variant>.
+            echo "$KEYSTORE_BASE64" | base64 -d > termux-release.keystore
           else
             echo "Warning: KEYSTORE_BASE64 not set, will build unsigned APK"
           fi
