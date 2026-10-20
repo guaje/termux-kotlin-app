@@ -51,6 +51,7 @@
 ### Changes
 - The supervisor anchor can report a death and offer a one-tap way back, but it cannot always restart Termux by itself: measured on Android 16, a background anchor has its launch blocked by the platform's background-activity rules (`Background activity launch blocked! ... BAL_BLOCK`), and it succeeds only while the anchor itself has a visible window. Making the anchor exempt is open work; see `docs` note in MEMORY.
 - Add the supervisor anchor (`:termux-anchor`, installed as `com.termux.anchor`): a second APK with its own uid that watches the app's heartbeat and asks the platform to bring it back when the reporting stops. Built by `:termux-anchor:assembleDev` and signed with the release key; deliberately not in the release train yet.
+- `termux-ship` asks the running app what it is before recording an attempt, so the ledger's `fromVersionCode` can no longer describe a build that was already replaced.
 - Bundle OpenSSH for fresh offline installs and supervise a fixed shared ssh-agent socket across terminal and tmux sessions.
 - Add an opt-in Background reliability settings screen, battery-optimization and phantom-process warnings, and recovery documentation.
 - The terminal service is now restarted by Android when its process is killed, takes over the sessions that are still alive and stops itself once nothing is running any more.
