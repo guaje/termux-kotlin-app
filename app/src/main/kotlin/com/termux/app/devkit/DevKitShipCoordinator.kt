@@ -100,23 +100,31 @@ class DevKitShipCoordinator(private val context: Context) {
         return when {
             !decision.accepted -> Report(false, "refused", decision.reason, candidate, null)
             !confirm -> Report(true, "verified", decision.reason, candidate, null)
+            !mayInstallPackages() -> Report(false, "refused", NEED_INSTALL_RIGHT, candidate, null)
             else -> stage(candidate, decision.reason)
         }
     }
 
     /**
-     * Whether this app currently holds the right to install without asking.
+     * Whether Android will let this app start an install at all.
      *
-     * Recorded, never required. Holding that right is what makes a commit *silent*, and a non-system
-     * app is not allowed to replace itself silently: on the handset, with the right granted through
-     * `appops`, commit() came back STATUS_FAILURE with no message in under a tenth of a second.
-     * Without it the platform routes the same session through its own confirmation dialog. So the
-     * presence of the right decides which path the platform takes, and refusing here would rule out
-     * the only path that can work.
+     * This gate was added on a guess, removed on a better guess, and put back because the handset
+     * settled it. With the right, staging produces the platform's "Do you want to update this app?"
+     * dialog and the update goes through. Without it the session commits, reports
+     * STATUS_PENDING_USER_ACTION, an installer component resolves, startActivity() returns without
+     * complaining - and nothing ever appears on screen, because the platform's installer will not run a
+     * confirmation flow for an app that may not install packages. The silent failure is the problem: the
+     * honest answer is to refuse up front and say which build and setting are needed.
      */
-    private fun mayInstallWithoutAsking(): Boolean = runCatching {
+    private fun mayInstallPackages(): Boolean = runCatching {
         context.packageManager.canRequestPackageInstalls()
     }.getOrDefault(false)
+
+    /** Which component Android will actually show the confirmation in, for the log and the status file. */
+    private fun consentComponent(dialog: Intent): String =
+        runCatching {
+            dialog.resolveActivity(context.packageManager)?.flattenToShortString() ?: "no installer resolves this"
+        }.getOrElse { error -> "unresolvable (${error.javaClass.simpleName})" }
 
     /**
      * Copy the apk into a session and commit it with an IntentSender, which is the path an
@@ -133,10 +141,11 @@ class DevKitShipCoordinator(private val context: Context) {
             val installer = context.packageManager.packageInstaller
             val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
             params.setSize(candidate.sizeBytes)
-            // No setAppPackageName(): the package comes from the apk itself. Naming it here asks the
-            // platform to treat the session as belonging to an existing package, which is the
-            // install-existing and staged-install path, and it is not what a full install is.
-            claimUpdateOwnership(params)
+            // Named for the platform's observers. This was removed once already on a guess that it was
+            // pushing the session onto the wrong code path; the documented purpose is narrower ("provide
+            // this value when known, so that observers can communicate installing apps to users") and
+            // removing it is what made the platform's own observer log "empty pkg name true".
+            params.setAppPackageName(candidate.packageName)
             requireUserAction(params)
 
             // The platform answers an Int session id. It is carried here as a Long so that "no
@@ -169,9 +178,24 @@ class DevKitShipCoordinator(private val context: Context) {
         }
     }
 
+    /**
+     * The PendingIntent the installer reports its verdict through, which must be mutable.
+     *
+     * This single flag caused a whole feature to be misdiagnosed. The platform does not hand you a
+     * finished result Intent: it takes the intent inside this PendingIntent and *fills in* EXTRA_STATUS,
+     * EXTRA_STATUS_MESSAGE and EXTRA_SESSION_ID as it sends. Fill-in values are ignored for an immutable
+     * PendingIntent - "any additional intent argument passed to the send methods to fill in unpopulated
+     * properties of the intent will be ignored" - and commit() only refuses an immutable statusReceiver
+     * outright when the caller targets SDK 35 or higher. This app targets 28, so there was no exception,
+     * no extras and no dialog; every answer arrived stripped to nothing and the endpoint read its own
+     * getIntExtra defaults as if the platform had spoken. AOSP's own installer tests use FLAG_MUTABLE for
+     * precisely this receiver.
+     */
     private fun pendingResult(): PendingIntent {
         val intent = Intent(DevKitShipReceiver.ACTION_SHIP_RESULT).setPackage(context.packageName)
-        val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        var flags = PendingIntent.FLAG_UPDATE_CURRENT
+        // Below API 31 mutability is not a flag to set: an unspecified PendingIntent is mutable already.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) flags = flags or PendingIntent.FLAG_MUTABLE
         return PendingIntent.getBroadcast(context, REQUEST_CODE, intent, flags)
     }
 
@@ -273,7 +297,10 @@ class DevKitShipCoordinator(private val context: Context) {
             "absent"
         }
         val dialog = if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) consentDialog(intent) else null
-        val dialogShown = dialog?.let { showConsentDialog(it) } ?: false
+        // Named for what it proves and nothing more: that the intent was handed over without throwing.
+        // Whether a dialog actually appeared is a separate question this cannot answer from here, which
+        // is exactly the confusion that cost the investigation its waymark.
+        val consentIntentStarted = dialog?.let { showConsentDialog(it) } ?: false
         val json = buildString {
             appendLine("{")
             appendLine("  " + quote("verdict") + ": ${quote(verdict)},")
@@ -282,7 +309,8 @@ class DevKitShipCoordinator(private val context: Context) {
             appendLine("  " + quote("message") + ": ${quote(message ?: "")},")
             appendLine("  " + quote("legacyStatus") + ": $legacyStatus,")
             appendLine("  " + quote("sessionId") + ": $sessionId,")
-            appendLine("  " + quote("dialogShown") + ": $dialogShown,")
+            appendLine("  " + quote("consentIntentStarted") + ": $consentIntentStarted,")
+            appendLine("  " + quote("consentComponent") + ": ${quote(dialog?.let { consentComponent(it) } ?: "none")},")
             appendLine("  " + quote("rawExtras") + ": ${quote(rawExtras)},")
             appendLine("  " + quote("session") + ": ${session ?: "null"},")
             appendLine("  " + quote("buildType") + ": ${quote(BuildConfig.BUILD_TYPE)},")
@@ -293,7 +321,7 @@ class DevKitShipCoordinator(private val context: Context) {
         Logger.logInfo(
             LOG_TAG,
             "installer reported status $status (succeeded=$succeeded, legacyStatus=$legacyStatus, " +
-                "dialogShown=$dialogShown): $message"
+                "consentIntentStarted=$consentIntentStarted): $message"
         )
     }
 
@@ -320,28 +348,38 @@ class DevKitShipCoordinator(private val context: Context) {
      * SessionInfo carries a human-readable message that the result broadcast often leaves out, so this
      * is usually the only place the real reason appears.
      */
-    private fun describeSession(sessionId: Int): String? {
-        val info = runCatching {
-            context.packageManager.packageInstaller.getSessionInfo(sessionId)
-        }.getOrNull() ?: return null
-        return buildString {
-            append("{ ")
-            append("mode=").append(info.mode)
+    /**
+     * What the platform still says about the session, if it kept it.
+     *
+     * Everything in here is wrapped because it is only ever called to explain a failure: on the handset
+     * this function threw "Session is not marked as staged" out of isStagedSessionFailed - the staged
+     * accessors are illegal on an ordinary session - and took the receiver down with it, deleting the
+     * one answer that had finally arrived. A diagnostic that can kill the thing it observes is worse than
+     * no diagnostic.
+     */
+    private fun describeSession(sessionId: Int): String? = runCatching {
+        val info = context.packageManager.packageInstaller.getSessionInfo(sessionId) ?: return null
+        buildString {
+            append("{ mode=").append(info.mode)
             append(", size=").append(info.size)
             append(", installer=").append(info.installerPackageName ?: "null")
-            append(", installerUid=").append(info.installerUid)
             append(", app=").append(info.appPackageName ?: "null")
             append(", requireUserAction=").append(info.requireUserAction)
             append(", active=").append(info.isActive)
             append(", committed=").append(info.isCommitted)
             append(", sealed=").append(info.isSealed)
             append(", staged=").append(info.isStaged)
-            append(", stagedFailed=").append(info.isStagedSessionFailed)
-            append(", stagedError=").append(info.stagedSessionErrorCode)
-            append(", stagedMessage=").append(info.stagedSessionErrorMessage?.take(120) ?: "null")
+            // These four are only legal on a staged session; ask before reading them.
+            if (info.isStaged) {
+                append(", stagedReady=").append(info.isStagedSessionReady)
+                append(", stagedActive=").append(info.isStagedSessionActive)
+                append(", stagedFailed=").append(info.isStagedSessionFailed)
+                append(", stagedError=").append(info.stagedSessionErrorMessage?.take(120) ?: "null")
+            }
             append(" }")
         }
-    }
+    }.getOrElse { error -> "unreadable(${error.javaClass.simpleName}: ${error.message?.take(120)})" }
+
 
 
     /**
@@ -357,20 +395,14 @@ class DevKitShipCoordinator(private val context: Context) {
         intent.extras?.getParcelable<Intent>(Intent.EXTRA_INTENT)
     }.getOrNull()
 
-    /**
-     * Tell the platform that this app is updating itself.
-     *
-     * Without this the session looks like one app installing over another, and the platform is then
-     * free to refuse it on the updating app's behalf - which is what happened: commit() answered
-     * STATUS_FAILURE immediately. Claiming ownership is also what lets this app keep control of the
-     * update flow instead of being killed at an arbitrary moment.
+    /*
+     * There used to be a setRequestUpdateOwnership(true) call here. Its javadoc makes it a lock placed
+     * on a package for the benefit of *future* installs, not a privilege for the caller: "The update
+     * ownership enforcement can only be enabled on initial installation. Set this to true on package
+     * update is a no-op", and enabling it requires the ENFORCE_UPDATE_OWNERSHIP permission this app does
+     * not hold. On a self-update it could never have done anything, so it is gone rather than kept as
+     * decoration.
      */
-    private fun claimUpdateOwnership(params: PackageInstaller.SessionParams) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            runCatching { params.setRequestUpdateOwnership(true) }
-                .onFailure { Logger.logWarn(LOG_TAG, "could not claim update ownership: ${it.message}") }
-        }
-    }
 
     /**
      * Ask for the user's confirmation rather than leaving it unspecified.
@@ -405,9 +437,9 @@ class DevKitShipCoordinator(private val context: Context) {
             appendLine("  " + quote("generation") + ": ${nextGeneration()},")
             appendLine("  " + quote("buildType") + ": " + quote(BuildConfig.BUILD_TYPE) + ",")
             appendLine("  " + quote("accepted") + ": ${report.accepted},")
-            // Which path the platform will take: with the right it installs without asking (and a
-            // non-system app may not replace itself that way), without it the user must confirm.
-            appendLine("  " + quote("silentInstallRight") + ": ${mayInstallWithoutAsking()},")
+            // Whether Android will let this app install at all. Without it no confirmation dialog is
+            // ever shown, which is why --confirm refuses rather than staging into silence.
+            appendLine("  " + quote("installRight") + ": ${mayInstallPackages()},")
             appendLine("  " + quote("action") + ": " + quote(report.action) + ",")
             appendLine("  " + quote("reason") + ": " + quote(report.reason) + ",")
             appendLine("  " + quote("at") + ": " + quote(ISO_8601.format(Date())) + ",")
@@ -487,6 +519,13 @@ class DevKitShipCoordinator(private val context: Context) {
         private const val LOG_TAG = "DevKitShipCoordinator"
         private const val APK_ENTRY = "base.apk"
         private const val REQUEST_CODE = 0x5DB1
+
+        /** The dev build must declare REQUEST_INSTALL_PACKAGES and be allowed to use it. */
+        private const val NEED_INSTALL_RIGHT =
+            "the apk passed every check, but Android shows no install dialog for an app that may not " +
+                "install packages, so staging would hang silently. Install a dev build (which declares " +
+                "REQUEST_INSTALL_PACKAGES) and allow it: `appops set com.termux " +
+                "REQUEST_INSTALL_PACKAGES allow`, or grant it under Settings > Install unknown apps."
 
         /** The key behind the framework's non-public EXTRA_LEGACY_STATUS constant. */
         private const val KEY_LEGACY_STATUS = "android.content.pm.extra.LEGACY_STATUS"

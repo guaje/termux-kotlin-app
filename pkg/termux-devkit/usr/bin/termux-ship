@@ -136,8 +136,16 @@ host_fact() {
 }
 
 read_field() {
-    local file="$1" field="$2"
-    sed -n 's/.*"'"$field"'"[[:space:]]*:[[:space:]]*"\{0,1\}\([^",}]*\)"\{0,1\}.*/\1/p' "$file" | head -1
+    local file="$1" field="$2" value
+    # A quoted value runs to its closing quote. Excluding commas here - which is what this function used
+    # to do - silently cut a refusal reason at its first comma, so the one string worth showing the user
+    # arrived as "the apk passed every check" while the actual explanation stayed in the file.
+    value=$(sed -n 's/.*"'"$field"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$file" | head -1)
+    if [ -z "$value" ]; then
+        # Bare value: a number, a boolean, or null.
+        value=$(sed -n 's/.*"'"$field"'"[[:space:]]*:[[:space:]]*\([^,}]*\).*/\1/p' "$file" | head -1)
+    fi
+    printf '%s' "$value"
 }
 
 num_field() {
