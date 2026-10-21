@@ -36,6 +36,12 @@
          the user can dismiss the anchor's ability to show at any time, not a nagging one. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- This is used only to put up the short rescue window that makes a background launch eligible
+         and gives the user a rescue tap, never to draw over them for any other reason. The user can
+         grant or revoke it in Settings; without it the anchor must still work by notifying, and the
+         notification's user-initiated tap remains the way back. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
     <!--
       The authentication for the whole design, in one line. protectionLevel="signature" means the
       platform grants this permission to a caller whose APK is signed with the same certificate as
@@ -123,9 +129,31 @@
           PROPERTY_SPECIAL_USE_FGS_SUBTYPE value below is the string a reviewer (and Play's scanner)
           reads in place of a type, and it is the same shape the app uses for its own services.
         -->
+        <!--
+          exported="true" only so that com.termux can keep this service alive, which is the only path
+          measured to work. The anchor cannot revive itself from a heartbeat: after its own process dies -
+          an update, a kill, the OEM battery manager - every start requested from the heartbeat receiver is
+          refused, and the platform said so at the beat cadence while the app kept reporting to a receiver
+          that was writing state into a supervision nobody was reading:
+
+            W ActivityManager: Foreground service started from background can not have
+              location/camera/microphone access: service com.termux.anchor/.AnchorSupervisorService
+
+          Measured on the razr fold 2026 / Android 16 after installing this module over itself: five beats,
+          five refusals, and `pidof com.termux.anchor` empty the whole time, so supervision had stopped
+          existing while the anchor looked healthy from the outside. The supervised app is the one that is
+          alive and often visible, so it is the one allowed to make this call; the signature permission means
+          only it can, and com.termux already holds it. Without the grant or the ability to start, BOOT_COMPLETED
+          is meant to be the remaining route, but it did not produce a running supervisor on the handset:
+          25 s after a reboot `pidof com.termux.anchor` was still empty, and supervision came back 5 s after
+          the user opened Termux, because that is when this app's beat started asking again. BOOT_COMPLETED
+          is therefore best read as a chance to restore state, not as a guarantee of supervision; after a
+          reboot with Termux never opened, nothing is watching.
+        -->
         <service
             android:name=".AnchorSupervisorService"
-            android:exported="false"
+            android:exported="true"
+            android:permission="com.termux.anchor.permission.CONTROL"
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"

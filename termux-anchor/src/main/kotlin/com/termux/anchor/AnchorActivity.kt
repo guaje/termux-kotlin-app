@@ -1,7 +1,9 @@
 package com.termux.anchor
 
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
 import android.util.TypedValue
 import android.widget.Button
 import android.widget.CheckBox
@@ -19,7 +21,7 @@ import androidx.core.content.ContextCompat
  * module owns almost no resources at all: `res/values/strings.xml` exists only because a manifest cannot
  * put a literal in `android:label` or `android:description`, and everything a user reads is drawn here.
  * A layout file would be the first thing to argue for `android.defaults.buildfeatures.resvalues`, which
- * gradle.properties switches off repository-wide, for a screen with five lines of text on it.
+ * gradle.properties switches off repository-wide, for a screen this small.
  *
  * Opening this screen is also one of three things that start the supervisor loop - the others are
  * BOOT_COMPLETED and a heartbeat arriving - and it is the one the user controls. That matters at the very
@@ -32,6 +34,7 @@ class AnchorActivity : AppCompatActivity() {
 
     private lateinit var state: AnchorState
     private lateinit var status: TextView
+    private lateinit var overlayCapability: TextView
 
     /**
      * The outcome of the last thing the user asked this screen to do. Kept in the view rather than in a
@@ -44,6 +47,7 @@ class AnchorActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         state = AnchorState(this)
         status = TextView(this).apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f) }
+        overlayCapability = TextView(this).apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f) }
         setContentView(screen())
         startSupervisorLoop()
     }
@@ -60,6 +64,7 @@ class AnchorActivity : AppCompatActivity() {
             setPadding(padding, padding, padding, padding)
             addView(status)
             addView(supervisionSwitch())
+            addView(overlayCapabilityRow())
             addView(resumeButton())
         }
         return ScrollView(this).apply { addView(column) }
@@ -70,6 +75,35 @@ class AnchorActivity : AppCompatActivity() {
         isChecked = state.supervisionEnabled
         setOnCheckedChangeListener { _, checked ->
             state.setSupervisionEnabled(checked)
+            render()
+        }
+    }
+
+    /**
+     * Explain the exact trade-off next to the Settings route: the grant enables the visible-window
+     * route, while refusing it still leaves detection and the user-initiated notification tap intact.
+     */
+    private fun overlayCapabilityRow(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        addView(overlayCapability)
+        addView(Button(context).apply {
+            text = "Manage display over other apps"
+            setOnClickListener { openOverlaySettings() }
+        })
+    }
+
+    /** OEM Settings builds do not all expose the dedicated action, so app details remains the fallback. */
+    private fun openOverlaySettings() {
+        val packageUri = Uri.parse("package:$packageName")
+        val openedOverlayPage = runCatching {
+            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, packageUri))
+        }.isSuccess
+        if (openedOverlayPage) return
+
+        runCatching {
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, packageUri))
+        }.onFailure { failure ->
+            lastAction = "Settings could not open this app's details: ${failure.message}"
             render()
         }
     }
@@ -106,6 +140,7 @@ class AnchorActivity : AppCompatActivity() {
     }
 
     private fun render() {
+        renderOverlayCapability()
         val snapshot = state.read()
         val bootId = AnchorState.readBootId()
         val ageSeconds = (System.currentTimeMillis() - snapshot.lastHeartbeatMs) / 1000
@@ -124,6 +159,18 @@ class AnchorActivity : AppCompatActivity() {
             appendLine("Reporter must hold: ${AnchorMessages.PERMISSION_CONTROL}")
             appendLine("")
             state.lastLedgerLines(LEDGER_LINES_SHOWN).forEach { appendLine(it) }
+        }
+    }
+
+    /** Read on every resume because returning from Settings is when this user-controlled fact changes. */
+    private fun renderOverlayCapability() {
+        overlayCapability.text = if (Settings.canDrawOverlays(this)) {
+            "Display over other apps: allowed. A visible rescue window can make a background restart " +
+                "request eligible. Only a later heartbeat can show whether Termux returned."
+        } else {
+            "Display over other apps: not allowed. Background restart requests are expected to be " +
+                "dropped; the anchor can still notify you, and the notification tap still works because " +
+                "your tap is exempt."
         }
     }
 
