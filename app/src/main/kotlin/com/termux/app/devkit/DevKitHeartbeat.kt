@@ -147,9 +147,9 @@ class DevKitHeartbeat(private val context: Context) {
                     "the supervisor service in $ANCHOR_PACKAGE could not be started: " +
                         (outcome.exceptionOrNull()?.let { "${it.javaClass.simpleName}: ${it.message}" } ?: "unknown") +
                         "; heartbeats are still being sent, but nothing is watching them, and until it is " +
-                        "running a death of this app will go unnoticed. Opening the anchor starts it; " +
-                        "a reboot does not - measured, the anchor was still not running 25 s after " +
-                        "BOOT_COMPLETED, and only this app's own beat revived it 5 s after it was opened."
+                        "running a death of this app will go unnoticed. Run termux-anchor to open it; " +
+                        "it has no launcher icon on purpose, and on this handset the vendor battery care " +
+                        "filters its own start at boot, so this beat is what brings it back."
                 )
             }
         }

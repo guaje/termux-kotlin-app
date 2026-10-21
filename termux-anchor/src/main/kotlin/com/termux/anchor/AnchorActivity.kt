@@ -3,6 +3,7 @@ package com.termux.anchor
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import android.util.TypedValue
 import android.widget.Button
@@ -35,6 +36,7 @@ class AnchorActivity : AppCompatActivity() {
     private lateinit var state: AnchorState
     private lateinit var status: TextView
     private lateinit var overlayCapability: TextView
+    private lateinit var batteryCapability: TextView
 
     /**
      * The outcome of the last thing the user asked this screen to do. Kept in the view rather than in a
@@ -48,6 +50,7 @@ class AnchorActivity : AppCompatActivity() {
         state = AnchorState(this)
         status = TextView(this).apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f) }
         overlayCapability = TextView(this).apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f) }
+        batteryCapability = TextView(this).apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f) }
         setContentView(screen())
         startSupervisorLoop()
     }
@@ -65,6 +68,7 @@ class AnchorActivity : AppCompatActivity() {
             addView(status)
             addView(supervisionSwitch())
             addView(overlayCapabilityRow())
+            addView(batteryCapabilityRow())
             addView(resumeButton())
         }
         return ScrollView(this).apply { addView(column) }
@@ -108,6 +112,35 @@ class AnchorActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Whether this package may skip battery optimization, offered because it was measured to matter: the
+     * vendor's battery care filters this app's start at boot ("isBatteryCareAllowedSelfStart restricted
+     * com.termux.anchor by mode") while com.termux is on the doze whitelist. Granting it is the user's
+     * call, and the anchor's behaviour is unchanged either way apart from *who* starts it after a reboot.
+     */
+    private fun batteryCapabilityRow(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        addView(batteryCapability)
+        addView(Button(context).apply {
+            text = "Ask to ignore battery optimization"
+            setOnClickListener {
+                lastAction = runCatching {
+                    startActivity(
+                        Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                            Uri.parse("package:$packageName"))
+                    )
+                }.recoverCatching {
+                    // Not every build implements the direct request; the list screen is the same decision
+                    // with one more tap, and going to the app's details page is the last way to offer it.
+                    startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                }.exceptionOrNull()?.let { failure ->
+                    "the battery optimization screen could not be opened: ${failure.message}"
+                } ?: "the system was asked; come back here to see whether it said yes"
+                render()
+            }
+        })
+    }
+
     private fun resumeButton(): Button = Button(this).apply {
         text = "Resume Termux now"
         setOnClickListener {
@@ -141,6 +174,7 @@ class AnchorActivity : AppCompatActivity() {
 
     private fun render() {
         renderOverlayCapability()
+        renderBatteryCapability()
         val snapshot = state.read()
         val bootId = AnchorState.readBootId()
         val ageSeconds = (System.currentTimeMillis() - snapshot.lastHeartbeatMs) / 1000
@@ -171,6 +205,21 @@ class AnchorActivity : AppCompatActivity() {
             "Display over other apps: not allowed. Background restart requests are expected to be " +
                 "dropped; the anchor can still notify you, and the notification tap still works because " +
                 "your tap is exempt."
+        }
+    }
+
+    /** Read on every resume, for the same reason as the overlay right: the answer changes in Settings. */
+    private fun renderBatteryCapability() {
+        val exempt = runCatching {
+            (getSystemService(POWER_SERVICE) as PowerManager).isIgnoringBatteryOptimizations(packageName)
+        }.getOrDefault(false)
+        batteryCapability.text = if (exempt) {
+            "Ignore battery optimization: allowed. This package may start itself after a reboot instead " +
+                "of waiting for Termux to come up and revive it. Neither state changes anything else."
+        } else {
+            "Ignore battery optimization: not allowed, and on this handset the vendor battery care does " +
+                "filter this app's start at boot. Supervision still returns once Termux is running, so " +
+                "this is about who starts the anchor, not about whether it works."
         }
     }
 
