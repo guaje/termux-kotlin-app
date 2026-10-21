@@ -1,0 +1,80 @@
+#!/data/data/com.termux/files/usr/bin/bash
+set -euo pipefail
+
+# termux-anchor - open the supervisor anchor's screen, and say what is known about it.
+#
+# This command exists because the anchor has no launcher icon. It is a component of Termux that lives in
+# its own package for exactly one reason - it has to be outside the uid that a package replace sweeps,
+# which is what MEMORY.md §16C measured - and an icon in the drawer invites a choice nobody should make on
+# their own. Hiding it has a price, and the price is this command: with no icon, the only in-app route to
+# the screen that grants rights and shows the ledger is here. If com.termux is broken, the screen is
+# unreachable and what remains is uninstalling the anchor from Settings.
+#
+# What it can honestly report from inside this uid: whether the package is there, and what the app's own
+# host facts say. It cannot read the anchor's state or ledger - those live in the other package's data
+# directory, and the whole point of the split is that they are not readable from here. So do not add a
+# status line that pretends otherwise; a line that says "unknown from here" is the accurate version.
+
+ANCHOR_PACKAGE="com.termux.anchor"
+ANCHOR_ACTIVITY="$ANCHOR_PACKAGE/.AnchorActivity"
+PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
+HOST_FACTS="$PREFIX/var/lib/termux-kotlin/devkit/host.json"
+
+usage() {
+    cat <<USAGE
+usage: termux-anchor [--open] [--status]
+
+  --open    Show the anchor's screen. Needs this session's app to be allowed to bring an activity
+            forward, which a terminal you are looking at is. If nothing appears, the platform dropped
+            the start for being from the background: press the notification instead, your tap there is
+            exempt from that rule.
+  --status  What can be known from inside Termux, which is less than people expect.
+
+The anchor is what notices that this app stopped reporting and asks the platform to bring it back. It
+installs nothing, and it cannot keep a session alive: tmux and anything attached to it dies with this
+uid when the app is replaced.
+USAGE
+}
+
+report_status() {
+    local path
+    if path="$(pm path "$ANCHOR_PACKAGE" 2>/dev/null | head -1)"; then :; else path=""; fi
+    if [ -z "$path" ]; then
+        echo "anchor      : not installed - supervision is off, and nothing else on this list matters"
+    else
+        echo "anchor      : installed ($path)"
+    fi
+    if [ -r "$HOST_FACTS" ]; then
+        echo "host facts  : present  $HOST_FACTS"
+        grep -o '"versionName": "[^"]*"' "$HOST_FACTS" | head -1 | sed 's/^/host        : /'
+        grep -o '"bootId": "[^"]*"' "$HOST_FACTS" | head -1 | sed 's/^/boot        : /'
+    else
+        echo "host facts  : absent - the app writes these when it starts"
+    fi
+    echo "anchor state: unknown from here, deliberately. The anchor keeps its own record in its own"
+    echo "              package data directory, and reading it across would undo the isolation that makes"
+    echo "              the anchor worth having. Run termux-anchor --open to see it."
+}
+
+case "${1:---status}" in
+    --open)
+        # termux-am is the client that reaches the platform through this app's own socket; plain am is
+        # the platform binary and works in the usual case. Either way the caller identity is this app,
+        # which is the package that holds com.termux.anchor.permission.CONTROL.
+        if command -v termux-am >/dev/null 2>&1; then
+            exec termux-am start -n "$ANCHOR_ACTIVITY"
+        fi
+        exec am start -n "$ANCHOR_ACTIVITY"
+        ;;
+    --status)
+        report_status
+        ;;
+    -h|--help)
+        usage
+        ;;
+    *)
+        echo "ERROR: unknown argument '$1'" >&2
+        usage >&2
+        exit 2
+        ;;
+esac

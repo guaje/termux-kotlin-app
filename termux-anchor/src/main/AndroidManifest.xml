@@ -43,6 +43,17 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!--
+      Not for convenience. Measured on this handset, the anchor's own start at boot is filtered by the
+      vendor's battery care ("MotoBatteryCareService: isBatteryCareAllowedSelfStart restricted
+      com.termux.anchor by mode") while com.termux sits on the doze whitelist
+      (`dumpsys deviceidle whitelist` lists user,com.termux and not this package). Being on that list is
+      the difference between the anchor starting itself after a reboot and waiting for Termux to come up
+      and revive it - which works, and takes up to a minute and a half, but it means a Termux that never
+      starts at boot leaves the device unsupervised.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!--
       The authentication for the whole design, in one line. protectionLevel="signature" means the
       platform grants this permission to a caller whose APK is signed with the same certificate as
       this one, and nothing else: no runtime prompt, no user tap to revoke, no token to leak. Both
@@ -81,15 +92,29 @@
         <!-- The status screen: what the anchor last saw, how many restarts it has attempted, and the
              user's own switch. Launcher-visible because the user has to be able to open it to enable
              supervision, and because "why is there a notification from this" needs an answer. -->
+        <!--
+          No launcher icon. This APK is a component of Termux that happens to live in its own package for
+          one reason - it has to survive the uid that a package replace sweeps - and an icon in the drawer
+          advertises a thing nobody should be choosing on their own. It is opened from inside Termux with
+          `termux-anchor`, which starts this activity explicitly, and android:permission is what keeps that
+          explicit route from being a door for anything else: only an APK signed with the same release key
+          holds com.termux.anchor.permission.CONTROL. excludeFromRecents because a card in the recent-apps
+          switcher is half an icon.
+
+          The cost of this, stated where someone will read it rather than discover it: if com.termux is
+          broken or uninstalled there is no way left to open this screen - not from the drawer, and Settings
+          offers no "Open" button for a package without a launcher activity. What remains is uninstalling
+          this app from Settings, or `adb shell am start -n com.termux.anchor/.AnchorActivity` for whoever
+          still has a cable. The supervisor itself does not need this screen; the screen is for granting
+          rights and for reading the ledger.
+        -->
         <activity
             android:name=".AnchorActivity"
+            android:excludeFromRecents="true"
             android:exported="true"
-            android:label="@string/anchor_app_name">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+            android:label="@string/anchor_app_name"
+            android:launchMode="singleTask"
+            android:permission="com.termux.anchor.permission.CONTROL" />
 
         <!--
           exported="true" is unavoidable: the sender is another package, so this is by definition a
@@ -144,11 +169,13 @@
           existing while the anchor looked healthy from the outside. The supervised app is the one that is
           alive and often visible, so it is the one allowed to make this call; the signature permission means
           only it can, and com.termux already holds it. Without the grant or the ability to start, BOOT_COMPLETED
-          is meant to be the remaining route, but it did not produce a running supervisor on the handset:
-          25 s after a reboot `pidof com.termux.anchor` was still empty, and supervision came back 5 s after
-          the user opened Termux, because that is when this app's beat started asking again. BOOT_COMPLETED
-          is therefore best read as a chance to restore state, not as a guarantee of supervision; after a
-          reboot with Termux never opened, nothing is watching.
+          is a chance to restore state and nothing more on this handset: the vendor's battery care filters
+          the self-start (MotoBatteryCareService: "isBatteryCareAllowedSelfStart restricted com.termux.anchor
+          by mode", logged three times over one boot). Supervision after a reboot arrives through the other
+          door instead - com.termux comes up, its beat starts, and the beat starts this service, measured
+          95 s after `sys.boot_completed` with the handset untouched, and the restart chain then worked again
+          45 s after a kill. What is genuinely unmonitored after a reboot is the window before Termux starts,
+          plus any device where Termux is not configured to start at boot.
         -->
         <service
             android:name=".AnchorSupervisorService"
