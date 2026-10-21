@@ -7,19 +7,28 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.Color
+import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.provider.Settings
 import android.util.Log
+import android.util.TypedValue
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
+import android.widget.FrameLayout
+import android.widget.TextView
 import androidx.core.app.NotificationCompat
 
 /**
  * The loop: read what is on record, ask [AnchorSupervisionPolicy] what to do, do it.
  *
- * Everything about this class is deliberately weak, because that is what makes it usable. It holds no
- * state of its own beyond the last sentence it displayed, it re-reads the file on every tick so a
- * heartbeat that arrived while it was asleep is picked up, and it never decides anything itself - the
+ * Everything about this class is deliberately weak, because that is what makes it usable. It holds only
+ * transient display state, it re-reads the file on every tick so a heartbeat that arrived while it was
+ * asleep is picked up, and it never decides anything itself - the
  * rules live in [AnchorSupervisionPolicy] where they are tested.
  *
  * It is a foreground service with a permanent notification because the alternative is worse: a service
@@ -37,10 +46,13 @@ class AnchorSupervisorService : Service() {
     /** The last reason written to the ledger, so that the ledger holds transitions rather than ticks. */
     private var writtenReason: String? = null
 
+    /** The rescue window currently shown, including the facts that bound its short lifetime. */
+    private var rescueOverlay: RescueOverlay? = null
+
     /**
-     * Set when the platform refused a launch request and cleared when one was accepted or a heartbeat
-     * arrived. While set, the notification is the one the user can act on, because a start the platform
-     * will not perform on our behalf is still a start it will perform on the user's.
+     * Set after every unanswered launch request and cleared when a heartbeat from this boot arrives.
+     * While set, the notification is the one the user can act on, because a start the platform will not
+     * perform on our behalf is still a start it will perform on the user's.
      */
     private var needsUserRescue = false
 
@@ -60,7 +72,8 @@ class AnchorSupervisorService : Service() {
     }
 
     override fun onDestroy() {
-        handler.removeCallbacks(tick)
+        handler.removeCallbacksAndMessages(null)
+        removeRescueOverlay()
         super.onDestroy()
     }
 
@@ -71,8 +84,10 @@ class AnchorSupervisorService : Service() {
         val state = AnchorState(this)
         val bootId = AnchorState.readBootId()
         val snapshot = state.read()
+        val nowMs = System.currentTimeMillis()
+        refreshRescueOverlay(snapshot, bootId, nowMs)
         val report = AnchorSupervisionPolicy.decide(
-            snapshot.toWatch(System.currentTimeMillis(), state.supervisionEnabled, bootId)
+            snapshot.toWatch(nowMs, state.supervisionEnabled, bootId)
         )
 
         when (report.action) {
@@ -120,6 +135,11 @@ class AnchorSupervisorService : Service() {
         report: AnchorSupervisionPolicy.Report
     ) {
         writtenReason = null
+        val canDrawOverlays = runCatching { Settings.canDrawOverlays(this) }.getOrDefault(false)
+        val method = AnchorSupervisionPolicy.rescueMethod(canDrawOverlays)
+        val overlayShown = method == AnchorSupervisionPolicy.RescueMethod.OVERLAY_AND_LAUNCH &&
+            showRescueOverlay(snapshot.lastHeartbeatMs)
+        val methodRecord = report.reason + rescueMethodRecord(method, overlayShown)
         val outcome = requestTermuxForeground()
         // True after every attempt, not only after one that threw. BAL (measured here, razr fold 2026 /
         // Android 16: "Background activity launch blocked! goo.gle/android-bal ...
@@ -135,9 +155,12 @@ class AnchorSupervisorService : Service() {
         // what the backoff ladder is read from, and a launch the platform refused is an attempt in the
         // only sense the ladder cares about: it cost the device a wake and it produced no heartbeat.
         val record = outcome.fold(
-            { report.reason + "; the launch request was handed over, which is not evidence that an " +
+            { methodRecord + "; the launch request was handed over, which is not evidence that an " +
                 "activity appeared - only the next heartbeat will show that" },
-            { failure -> "restart attempt refused: ${failure.javaClass.simpleName}: ${failure.message}" }
+            { failure ->
+                methodRecord + "; the launch request was refused: ${failure.javaClass.simpleName}: " +
+                    failure.message
+            }
         )
         outcome.exceptionOrNull()?.let {
             Log.w(TAG, "the launch request for ${AnchorMessages.TERMUX_PACKAGE} was refused", it)
@@ -145,6 +168,107 @@ class AnchorSupervisorService : Service() {
         state.recordRestartAttempt(snapshot, bootId, record)
         show(record)
     }
+
+    /** State the route that was actually available without treating the launch request as recovery. */
+    private fun rescueMethodRecord(
+        method: AnchorSupervisionPolicy.RescueMethod,
+        overlayShown: Boolean
+    ): String = when {
+        method == AnchorSupervisionPolicy.RescueMethod.LAUNCH_ONLY ->
+            "; no overlay right, so the launch was attempted blind and is expected to be dropped unless " +
+                "this app happens to be on screen"
+        overlayShown ->
+            "; asked the platform for the foreground, with an overlay window up first (the visible window " +
+                "is what makes the launch legal from the background)"
+        else ->
+            "; the overlay right was held, but the window could not be shown; the launch was attempted " +
+                "without a visible non-app window"
+    }
+
+    /**
+     * Put up the one window this permission is for before asking the platform for the foreground.
+     *
+     * The permission can be revoked between [Settings.canDrawOverlays] and `addView`, and window manager
+     * can reject a request for reasons this process cannot inspect. Both were kept non-fatal because the
+     * blind launch and the notification tap are still useful; the warning and ledger route preserve the
+     * distinction instead of making a failed overlay look present.
+     */
+    private fun showRescueOverlay(lastHeartbeatMs: Long): Boolean {
+        if (rescueOverlay != null) return true
+        return runCatching {
+            val shownAtMs = System.currentTimeMillis()
+            val view = buildRescueOverlay()
+            windowManager().addView(view, rescueOverlayLayoutParams())
+            rescueOverlay = RescueOverlay(view, shownAtMs, lastHeartbeatMs)
+        }.onFailure {
+            Log.w(TAG, "the rescue overlay could not be shown", it)
+        }.isSuccess
+    }
+
+    /** A full-width strip is enough to be visible to Android and enough to give the user a rescue tap. */
+    private fun buildRescueOverlay(): View {
+        val padding = (12 * resources.displayMetrics.density).toInt()
+        return FrameLayout(this).apply {
+            setBackgroundColor(Color.argb(230, 48, 48, 48))
+            setPadding(padding, padding, padding, padding)
+            addView(TextView(context).apply {
+                text = "Termux stopped reporting. Tap to ask Android to open it."
+                setTextColor(Color.WHITE)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            })
+            setOnClickListener {
+                val outcome = requestTermuxForeground()
+                outcome.exceptionOrNull()?.let { failure ->
+                    Log.w(TAG, "the tapped rescue request for ${AnchorMessages.TERMUX_PACKAGE} was refused", failure)
+                }
+                removeRescueOverlay()
+            }
+        }
+    }
+
+    /** The old alert type is only used on Android 7, below TYPE_APPLICATION_OVERLAY's API level. */
+    private fun rescueOverlayLayoutParams(): WindowManager.LayoutParams = WindowManager.LayoutParams(
+        WindowManager.LayoutParams.MATCH_PARENT,
+        WindowManager.LayoutParams.WRAP_CONTENT,
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        } else {
+            // minSdk 24 still needs the deprecated alert type; newer releases reject it in favour of
+            // TYPE_APPLICATION_OVERLAY, so the old constant cannot escape this version branch.
+            WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
+        },
+        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+        PixelFormat.TRANSLUCENT
+    ).apply {
+        gravity = Gravity.TOP
+    }
+
+    /** A heartbeat from this boot or an expired lifetime makes the rescue window no longer justified. */
+    private fun refreshRescueOverlay(snapshot: AnchorState.Snapshot, bootId: String, nowMs: Long) {
+        val overlay = rescueOverlay ?: return
+        val lastHeartbeatMs = if (snapshot.bootId == bootId) {
+            snapshot.lastHeartbeatMs
+        } else {
+            overlay.lastHeartbeatAtShowMs
+        }
+        val wanted = AnchorSupervisionPolicy.overlayStillWanted(
+            nowMs,
+            overlay.shownAtMs,
+            lastHeartbeatMs,
+            overlay.lastHeartbeatAtShowMs
+        )
+        if (!wanted) removeRescueOverlay()
+    }
+
+    /** Removal is best effort because a dead window token must not take down the foreground service. */
+    private fun removeRescueOverlay() {
+        val overlay = rescueOverlay ?: return
+        rescueOverlay = null
+        runCatching { windowManager().removeView(overlay.view) }
+            .onFailure { Log.w(TAG, "the rescue overlay could not be removed", it) }
+    }
+
+    private fun windowManager(): WindowManager = getSystemService(WINDOW_SERVICE) as WindowManager
 
     /**
      * Hand the platform an intent to bring Termux to the foreground.
@@ -169,10 +293,17 @@ class AnchorSupervisorService : Service() {
      *   process logged was the platform line quoted in [attemptRestart].
      * The difference is the caller's window state, not the intent, and it is the whole restriction on this
      * design: a background foreground-service may not start an activity. The paths that still work are the
-     * notification's tap-through, which is a user action and therefore exempt, and whatever makes the
-     * anchor exempt on its own - SYSTEM_ALERT_WINDOW is the documented one a normal app can be granted.
-     * Until that is settled, "supervision" means "you will be told, in a notification you can act on", and
-     * not "it comes back by itself".
+     * notification's tap-through, which is a user action and therefore exempt, and a visible non-app
+     * window. The latter is the route used by the overlay attempt here, and it was settled by measurement
+     * rather than inferred from the refusal's fields:
+     * - overlay right granted, launcher on top: killed 11:31:02, Termux running again 11:31:32 (30 s), and
+     *   `Background activity launch blocked` appeared zero times afterwards.
+     * - right revoked, same procedure: nothing came back within 60 s and the block line appeared once. The
+     *   grant is what changed the outcome, not the passage of time.
+     * - after a full reboot, same test: killed 11:37:43, back 11:38:29 (46 s), zero blocks.
+     * What is still not established is whether a window of *this* shape stays eligible indefinitely, since
+     * the overlay is dismissed as soon as a heartbeat returns - the exemption is only needed for the moment
+     * of the launch request, which is how it is used.
      */
     private fun requestTermuxForeground(): Result<Unit> = runCatching {
         val launch = packageManager.getLaunchIntentForPackage(AnchorMessages.TERMUX_PACKAGE)
@@ -183,10 +314,17 @@ class AnchorSupervisorService : Service() {
     }
 
     private fun show(reason: String) {
-        val text = if (needsUserRescue) RESCUE_TEXT else reason
+        val text = if (needsUserRescue) rescueNotificationText() else reason
         if (text == shownText) return
         shownText = text
         notificationManager().notify(NOTIFICATION_ID, buildNotification(text))
+    }
+
+    /** Without the overlay right, the notification must say plainly that only the user's tap is reliable. */
+    private fun rescueNotificationText(): String = if (Settings.canDrawOverlays(this)) {
+        RESCUE_TEXT
+    } else {
+        NO_OVERLAY_RESCUE_TEXT
     }
 
     private fun startForegroundNotification() {
@@ -270,7 +408,18 @@ class AnchorSupervisorService : Service() {
 
         private const val WATCHING_TEXT = "watching for heartbeats from com.termux"
 
-        /** What the user is asked to do when the platform will not act on the anchor's request. */
+        /** What the user is asked to do when an overlay-backed request is still unanswered. */
         private const val RESCUE_TEXT = "Termux stopped responding — tap to resume"
+
+        /** The missing right and the still-working user route, without promising that either already ran. */
+        private const val NO_OVERLAY_RESCUE_TEXT =
+            "Termux stopped responding — allow display over other apps so background rescue can be " +
+                "attempted; without it nothing comes back by itself. Tap this notification to resume Termux."
     }
+
+    private data class RescueOverlay(
+        val view: View,
+        val shownAtMs: Long,
+        val lastHeartbeatAtShowMs: Long
+    )
 }

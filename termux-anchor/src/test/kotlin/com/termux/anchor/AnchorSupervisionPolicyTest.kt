@@ -1,11 +1,14 @@
 package com.termux.anchor
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import com.termux.anchor.AnchorSupervisionPolicy.Action.HOLD
 import com.termux.anchor.AnchorSupervisionPolicy.Action.RESTART
 import com.termux.anchor.AnchorSupervisionPolicy.Action.WAIT
+import com.termux.anchor.AnchorSupervisionPolicy.RescueMethod.LAUNCH_ONLY
+import com.termux.anchor.AnchorSupervisionPolicy.RescueMethod.OVERLAY_AND_LAUNCH
 import com.termux.anchor.AnchorSupervisionPolicy.RestartPolicy
 
 /**
@@ -46,6 +49,78 @@ class AnchorSupervisionPolicyTest {
 
     private fun assertExplains(report: AnchorSupervisionPolicy.Report, fragment: String) {
         assertTrue("\"${report.reason}\" did not mention \"$fragment\"", report.reason.contains(fragment))
+    }
+
+    /** Without this choice, a held overlay right would not change a background attempt's eligible route. */
+    @Test
+    fun anOverlayRightChoosesAVisibleWindowBeforeTheLaunch() {
+        assertEquals(OVERLAY_AND_LAUNCH, AnchorSupervisionPolicy.rescueMethod(canDrawOverlays = true))
+    }
+
+    /** Without this fallback, refusing or revoking the right would prevent even the best-effort request. */
+    @Test
+    fun noOverlayRightStillChoosesTheBlindLaunch() {
+        assertEquals(LAUNCH_ONLY, AnchorSupervisionPolicy.rescueMethod(canDrawOverlays = false))
+    }
+
+    /** Silence must leave the rescue tap available briefly rather than removing it on the next tick. */
+    @Test
+    fun anOverlayStaysWhileTheSameHeartbeatRemainsLatest() {
+        assertTrue(
+            AnchorSupervisionPolicy.overlayStillWanted(
+                nowMs = NOW,
+                shownAtMs = NOW - 30_000L,
+                lastHeartbeatMs = HEARTBEAT_AT_SHOW,
+                lastHeartbeatAtShowMs = HEARTBEAT_AT_SHOW
+            )
+        )
+    }
+
+    /** A newer heartbeat is the evidence of recovery; keeping the overlay after it would cover the user for no reason. */
+    @Test
+    fun anOverlayGoesAwayWhenANewerHeartbeatArrives() {
+        assertFalse(
+            AnchorSupervisionPolicy.overlayStillWanted(
+                nowMs = NOW,
+                shownAtMs = NOW - 15_000L,
+                lastHeartbeatMs = HEARTBEAT_AT_SHOW + 1L,
+                lastHeartbeatAtShowMs = HEARTBEAT_AT_SHOW
+            )
+        )
+    }
+
+    /** At the lifetime boundary, an unanswered app must not leave a rescue window stuck over other work. */
+    @Test
+    fun anOverlayIsDroppedAtItsTtl() {
+        assertFalse(
+            AnchorSupervisionPolicy.overlayStillWanted(
+                nowMs = NOW,
+                shownAtMs = NOW - AnchorSupervisionPolicy.OVERLAY_TTL_MS,
+                lastHeartbeatMs = HEARTBEAT_AT_SHOW,
+                lastHeartbeatAtShowMs = HEARTBEAT_AT_SHOW
+            )
+        )
+    }
+
+    /** A clock behind either recorded event cannot be allowed to turn a short-lived window into a permanent one. */
+    @Test
+    fun anOverlayIsDroppedWhenTheClockMovesBehindItsRecords() {
+        assertFalse(
+            AnchorSupervisionPolicy.overlayStillWanted(
+                nowMs = NOW,
+                shownAtMs = NOW + 1L,
+                lastHeartbeatMs = HEARTBEAT_AT_SHOW,
+                lastHeartbeatAtShowMs = HEARTBEAT_AT_SHOW
+            )
+        )
+        assertFalse(
+            AnchorSupervisionPolicy.overlayStillWanted(
+                nowMs = NOW,
+                shownAtMs = NOW - 1L,
+                lastHeartbeatMs = NOW + 1L,
+                lastHeartbeatAtShowMs = NOW + 1L
+            )
+        )
     }
 
     @Test
@@ -194,6 +269,7 @@ class AnchorSupervisionPolicyTest {
     private companion object {
         /** Some moment that is not a real timestamp; only differences of it are ever read. */
         private const val NOW = 1_700_000_000_000L
+        private const val HEARTBEAT_AT_SHOW = NOW - 60_000L
 
         private const val BOOT_BEFORE = "11111111-2222-3333-4444-555555555555"
         private const val BOOT_AFTER = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"

@@ -27,6 +27,9 @@ object AnchorSupervisionPolicy {
     /** The period the supervisor loop runs on; also the answer given when nothing is known yet. */
     const val CHECK_INTERVAL_MS: Long = 15_000L
 
+    /** One stale window is enough time for a visible rescue request to remain available. */
+    const val OVERLAY_TTL_MS: Long = 45_000L
+
     /**
      * 45 s * 2^6 = 48 min, already past the ceiling, so rung 6 is the last one the ladder can need and
      * the shift below never reaches a width where it could overflow.
@@ -39,6 +42,36 @@ object AnchorSupervisionPolicy {
         HOLD,
         WAIT
     }
+
+    /** The platform route available for an attempt, based only on the right currently held. */
+    enum class RescueMethod {
+        OVERLAY_AND_LAUNCH,
+        LAUNCH_ONLY
+    }
+
+    /** A visible non-app window is the route that makes a background launch eligible. */
+    fun rescueMethod(canDrawOverlays: Boolean): RescueMethod = if (canDrawOverlays) {
+        RescueMethod.OVERLAY_AND_LAUNCH
+    } else {
+        RescueMethod.LAUNCH_ONLY
+    }
+
+    /**
+     * Keep a rescue window only while the same unanswered heartbeat is latest and its short lifetime
+     * has not elapsed.
+     *
+     * Both timestamps come from the device clock. A negative age, or a heartbeat later than the clock
+     * reading used to judge it, means that clock moved and cannot justify leaving a window on screen.
+     */
+    fun overlayStillWanted(
+        nowMs: Long,
+        shownAtMs: Long,
+        lastHeartbeatMs: Long,
+        lastHeartbeatAtShowMs: Long
+    ): Boolean = nowMs >= shownAtMs &&
+        nowMs - shownAtMs in 0L until OVERLAY_TTL_MS &&
+        lastHeartbeatMs <= nowMs &&
+        lastHeartbeatMs == lastHeartbeatAtShowMs
 
     /**
      * What the app said about whether it may be restarted, carried in every heartbeat as

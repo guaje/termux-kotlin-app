@@ -45,6 +45,9 @@ class DevKitHeartbeat(private val context: Context) {
     /** null until the first probe, then whether the anchor was installed at that moment. */
     private var anchorPresent: Boolean? = null
 
+    /** null until the first revive attempt, then whether the platform let the supervisor be started. */
+    private var supervisorReachable: Boolean? = null
+
     /** Set by [stop]; checked inside the loop because [stop] is not required to run on this thread. */
     @Volatile
     private var stopped = false
@@ -54,7 +57,10 @@ class DevKitHeartbeat(private val context: Context) {
             if (stopped) return
             // The decision about whether anyone is listening is made every beat rather than once at
             // start-up, see [start].
-            if (anchorInstalled()) sendOnce()
+            if (anchorInstalled()) {
+                sendOnce()
+                ensureSupervisorRunning()
+            }
             handler.postDelayed(this, INTERVAL_MS)
         }
     }
@@ -107,6 +113,46 @@ class DevKitHeartbeat(private val context: Context) {
             )
         }
         return present
+    }
+
+    /**
+     * Ask the anchor to be running, on every beat, because a supervisor that is not running supervises
+     * nothing.
+     *
+     * The direction matters and was chosen from a measurement, not from taste: the anchor cannot start this
+     * service for itself once its own process dies - starts from its heartbeat receiver are refused by the
+     * platform, five refusals in a row at the beat cadence, with `pidof com.termux.anchor` empty throughout
+     * and the app happily reporting into a receiver that wrote state nobody read. This app is the side that
+     * is alive, and frequently visible, so it is the side the platform lets start a foreground service, and
+     * it already holds the signature permission the exported service demands.
+     *
+     * Unlike a blocked activity start, this one fails with an exception in the caller, so the answer is worth
+     * recording: the refusals are visible in this app's log rather than only in the platform's. Logged when
+     * the answer changes, because a beat every 15 seconds would otherwise bury everything else in there.
+     */
+    private fun ensureSupervisorRunning() {
+        val outcome = runCatching {
+            context.startForegroundService(
+                Intent().setClassName(ANCHOR_PACKAGE, SUPERVISOR_SERVICE_CLASS)
+            )
+        }
+        val answer = outcome.isSuccess
+        if (answer != supervisorReachable) {
+            supervisorReachable = answer
+            if (answer) {
+                Logger.logInfo(LOG_TAG, "supervisor $ANCHOR_PACKAGE/$SUPERVISOR_SERVICE_CLASS is running or was started")
+            } else {
+                Logger.logWarn(
+                    LOG_TAG,
+                    "the supervisor service in $ANCHOR_PACKAGE could not be started: " +
+                        (outcome.exceptionOrNull()?.let { "${it.javaClass.simpleName}: ${it.message}" } ?: "unknown") +
+                        "; heartbeats are still being sent, but nothing is watching them, and until it is " +
+                        "running a death of this app will go unnoticed. Opening the anchor starts it; " +
+                        "a reboot does not - measured, the anchor was still not running 25 s after " +
+                        "BOOT_COMPLETED, and only this app's own beat revived it 5 s after it was opened."
+                )
+            }
+        }
     }
 
     /** One beat, delivered or not. Failures are logged at debug because they are expected and repetitive. */
@@ -165,6 +211,9 @@ class DevKitHeartbeat(private val context: Context) {
         private const val INTERVAL_MS = 15_000L
 
         private const val ANCHOR_PACKAGE = "com.termux.anchor"
+        /** The anchor's own supervisor service, named here as a string because the two APKs share no code. */
+        private const val SUPERVISOR_SERVICE_CLASS = "com.termux.anchor.AnchorSupervisorService"
+
         private const val ACTION_HEARTBEAT = "com.termux.anchor.HEARTBEAT"
         private const val EXTRA_VERSION_CODE = "com.termux.anchor.extra.VERSION_CODE"
         private const val EXTRA_BOOT_ID = "com.termux.anchor.extra.BOOT_ID"
