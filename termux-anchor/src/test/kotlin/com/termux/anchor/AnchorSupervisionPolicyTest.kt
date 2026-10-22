@@ -33,7 +33,9 @@ class AnchorSupervisionPolicyTest {
         policy: RestartPolicy = RestartPolicy.ALWAYS,
         bootId: String = BOOT_AFTER,
         lastAttemptBootId: String = "",
-        lastAttemptMs: Long = 0L
+        lastAttemptMs: Long = 0L,
+        lastHeartbeatBootId: String = "",
+        userStopped: Boolean = false
     ) = AnchorSupervisionPolicy.decide(
         AnchorSupervisionPolicy.Watch(
             nowMs = NOW,
@@ -43,7 +45,9 @@ class AnchorSupervisionPolicyTest {
             policyFromApp = policy,
             bootId = bootId,
             lastAttemptBootId = lastAttemptBootId,
-            lastAttemptMs = lastAttemptMs
+            lastAttemptMs = lastAttemptMs,
+            lastHeartbeatBootId = lastHeartbeatBootId,
+            closedByUser = userStopped
         )
     )
 
@@ -264,6 +268,70 @@ class AnchorSupervisionPolicyTest {
             lastAttemptBootId = "unknown"
         )
         assertEquals(HOLD, report.action)
+    }
+
+    /**
+     * The user closed Termux with its own Exit. Silence follows, and silence is exactly what a death looks
+     * like - so the flag on the goodbye beat is the only thing that can tell them apart, and this is the rule
+     * the handset asked for: an app the user closed stays closed.
+     */
+    @Test
+    fun aStopTheUserAskedForIsLeftAlone() {
+        val report = report(lastHeartbeatMs = secondsAgo(600), userStopped = true)
+        assertEquals(HOLD, report.action)
+        assertExplains(report, "the user stopped this app on purpose")
+        assertTrue("an app the user closed needs no notification about it", report.standsDown)
+    }
+
+    /**
+     * Not every hold is the user's decision. A refusal from the policy file still wants a watching supervisor
+     * and a visible reason, because the user may flip that file back at any moment and expect to be covered
+     * immediately afterwards.
+     */
+    @Test
+    fun aHoldThatIsNotTheUserSDecisionKeepsWatching() {
+        val report = report(lastHeartbeatMs = secondsAgo(600), policy = RestartPolicy.NEVER)
+        assertEquals(HOLD, report.action)
+        assertFalse("only a wait for the user may stand down", report.standsDown)
+    }
+
+    /**
+     * The control for the rule above. Without it, "hold when the flag is set" could pass by holding always,
+     * and the anchor would quietly stop doing the one job it exists for.
+     */
+    @Test
+    fun silenceWithoutTheGoodbyeFlagIsStillTreatedAsADeath() {
+        assertEquals(RESTART, report(lastHeartbeatMs = secondsAgo(600)).action)
+    }
+
+    /**
+     * A reboot is the one event after which an absent Termux is the expected state. Restoring sessions is the
+     * user's decision, made by opening the app; a supervisor that reads every boot as an emergency throws a
+     * terminal over the lock screen's successor on every unlock.
+     */
+    @Test
+    fun aRebootTheUserHasNotVisitedYetIsNotAnEmergency() {
+        val report = report(lastHeartbeatMs = secondsAgo(600), lastHeartbeatBootId = BOOT_BEFORE)
+        assertEquals(HOLD, report.action)
+        assertExplains(report, "the user has not opened it yet in this boot")
+        assertTrue("a boot the user has not visited needs no notification about it", report.standsDown)
+    }
+
+    /** Same boot id on both sides: the ordinary case, which must still be restarted. */
+    @Test
+    fun aBeatFromThisBootIsNotAReboot() {
+        assertEquals(RESTART, report(lastHeartbeatMs = secondsAgo(600), lastHeartbeatBootId = BOOT_AFTER).action)
+    }
+
+    /**
+     * An unreadable boot id is a failed read, not a reboot. A guard that treated "unknown" as a different boot
+     * would switch supervision off permanently at the moment a file became unreadable, which is the wrong
+     * direction for this particular thing to fail in.
+     */
+    @Test
+    fun anUnreadableBootIdInventsNoReboot() {
+        val unknown = AnchorSupervisionPolicy.UNKNOWN_BOOT_ID
+        assertEquals(RESTART, report(lastHeartbeatMs = secondsAgo(600), lastHeartbeatBootId = unknown).action)
     }
 
     private companion object {

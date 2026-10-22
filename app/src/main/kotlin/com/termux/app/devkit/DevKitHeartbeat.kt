@@ -89,6 +89,34 @@ class DevKitHeartbeat(private val context: Context) {
      * holds - alive forever. Today the only caller is `onDestroy()` on that same looper, so the removal
      * alone happens to be enough, and "happens to" is not a reason to leave the trap in place.
      */
+    /**
+     * Say goodbye, then stop: the one beat that carries "the user stopped me", so that the anchor leaves this
+     * app closed instead of reading a deliberate exit as a death.
+     *
+     * Sent on the way out rather than inferred afterwards because it cannot be inferred afterwards. Nothing
+     * in this uid survives the stop, and the anchor is left with one fact - silence - which is worth nothing
+     * on its own: a crash, a vendor cull, a package replace and a user pressing Exit all look identical from
+     * the outside. The exit path is therefore the only place that can supply the distinction, and it is worth
+     * a broadcast to do it (MEMORY.md §19).
+     *
+     * Then [stop], because a beat that keeps arriving after this would clear the flag it just set and put the
+     * nagging behaviour straight back.
+     */
+    fun markStoppedByUser() {
+        if (!BuildConfig.DEVKIT_HOST) return
+        runCatching {
+            val goodbye = Intent(ACTION_HEARTBEAT)
+            goodbye.setPackage(ANCHOR_PACKAGE)
+            goodbye.putExtra(EXTRA_VERSION_CODE, versionCode())
+            goodbye.putExtra(EXTRA_BOOT_ID, bootId())
+            goodbye.putExtra(EXTRA_POLICY, supervisionPolicy())
+            goodbye.putExtra(EXTRA_USER_STOPPED, true)
+            context.sendBroadcast(goodbye)
+        }.onFailure { Logger.logDebug(LOG_TAG, "goodbye beat not delivered: ${it.message}") }
+        stop()
+        Logger.logInfo(LOG_TAG, "reported a stop the user asked for; supervision waits for the user")
+    }
+
     fun stop() {
         stopped = true
         handler.removeCallbacks(beat)
@@ -218,6 +246,7 @@ class DevKitHeartbeat(private val context: Context) {
         private const val EXTRA_VERSION_CODE = "com.termux.anchor.extra.VERSION_CODE"
         private const val EXTRA_BOOT_ID = "com.termux.anchor.extra.BOOT_ID"
         private const val EXTRA_POLICY = "com.termux.anchor.extra.POLICY"
+        private const val EXTRA_USER_STOPPED = "com.termux.anchor.extra.USER_STOPPED"
 
         private const val BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id"
 

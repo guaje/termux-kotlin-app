@@ -38,7 +38,13 @@ class AnchorState(context: Context) {
         val attempts: Int = 0,
         val attemptBootId: String = "",
         val lastAttemptMs: Long = 0L,
-        val policyFromApp: Int = AnchorSupervisionPolicy.RestartPolicy.WIRE_ALWAYS
+        val policyFromApp: Int = AnchorSupervisionPolicy.RestartPolicy.WIRE_ALWAYS,
+        /**
+         * Whether the last beat said "the user stopped me". Kept until a beat says otherwise, which is how
+         * a deliberate exit outlasts the process that reported it, and why a relaunch needs the user rather
+         * than a stale-beat inference.
+         */
+        val userStopped: Boolean = false
     ) {
         /** The same facts in the shape [AnchorSupervisionPolicy] reads. */
         fun toWatch(
@@ -53,7 +59,9 @@ class AnchorState(context: Context) {
             policyFromApp = AnchorSupervisionPolicy.RestartPolicy.fromWire(policyFromApp),
             bootId = currentBootId,
             lastAttemptBootId = attemptBootId,
-            lastAttemptMs = lastAttemptMs
+            lastAttemptMs = lastAttemptMs,
+            lastHeartbeatBootId = bootId,
+            closedByUser = userStopped
         )
     }
 
@@ -71,7 +79,8 @@ class AnchorState(context: Context) {
             attempts = number(json, "attempts", 0L).toInt(),
             attemptBootId = text(json, "attemptBootId"),
             lastAttemptMs = number(json, "lastAttemptMs", 0L),
-            policyFromApp = number(json, "policyFromApp", 0L).toInt()
+            policyFromApp = number(json, "policyFromApp", 0L).toInt(),
+            userStopped = json.contains("\"$KEY_USER_STOPPED\": true")
         )
     }
 
@@ -80,14 +89,21 @@ class AnchorState(context: Context) {
      * evidence that a previous restart attempt worked, and the ladder has nothing left to space out
      * once the app is reporting again.
      */
-    fun recordHeartbeat(nowMs: Long, versionCode: Long, bootId: String, policyFromApp: Int) {
+    fun recordHeartbeat(
+        nowMs: Long,
+        versionCode: Long,
+        bootId: String,
+        policyFromApp: Int,
+        userStopped: Boolean
+    ) {
         val snapshot = Snapshot(
             lastHeartbeatMs = nowMs,
             lastVersionCode = versionCode,
             bootId = bootId,
             attempts = 0,
             attemptBootId = "",
-            policyFromApp = policyFromApp
+            policyFromApp = policyFromApp,
+            userStopped = userStopped
         )
         save(snapshot)
         append(
@@ -142,7 +158,8 @@ class AnchorState(context: Context) {
             appendLine("  \"attempts\": ${snapshot.attempts},")
             appendLine("  \"attemptBootId\": ${quote(snapshot.attemptBootId)},")
             appendLine("  \"lastAttemptMs\": ${snapshot.lastAttemptMs},")
-            appendLine("  \"policyFromApp\": ${snapshot.policyFromApp}")
+            appendLine("  \"policyFromApp\": ${snapshot.policyFromApp},")
+            appendLine("  \"$KEY_USER_STOPPED\": ${snapshot.userStopped}")
             append("}")
         }
         runCatching { writeAtomically(stateFile, json) }
@@ -224,6 +241,9 @@ class AnchorState(context: Context) {
 
         private const val PREFERENCES_NAME = "supervision"
         private const val KEY_SUPERVISION_ENABLED = "supervision_enabled"
+
+        /** JSON key and the SharedPreferences-free flag live in one file, so one name serves both. */
+        private const val KEY_USER_STOPPED = "userStopped"
 
         const val EVENT_HEARTBEAT: String = "HEARTBEAT"
         const val EVENT_RESTART: String = "RESTART"

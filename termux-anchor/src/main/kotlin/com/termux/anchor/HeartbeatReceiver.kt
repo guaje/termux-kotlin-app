@@ -30,7 +30,10 @@ class HeartbeatReceiver : BroadcastReceiver() {
             AnchorMessages.EXTRA_POLICY,
             AnchorSupervisionPolicy.RestartPolicy.WIRE_ALWAYS
         )
-        AnchorState(context).recordHeartbeat(System.currentTimeMillis(), versionCode, bootId, policy)
+        // Absent means "still running", not "unknown": the extra is only ever put on the beat that is sent
+        // on the way out, so a build too old to know about it keeps the behaviour it always had.
+        val userStopped = intent.getBooleanExtra(AnchorMessages.EXTRA_USER_STOPPED, false)
+        AnchorState(context).recordHeartbeat(System.currentTimeMillis(), versionCode, bootId, policy, userStopped)
 
         scheduleNextCheck(context)
     }
