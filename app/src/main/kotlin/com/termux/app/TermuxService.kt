@@ -17,6 +17,7 @@ import android.os.PowerManager
 import com.termux.BuildConfig
 import com.termux.R
 import com.termux.app.devkit.DevKitHeartbeat
+import com.termux.app.devkit.DevKitHostFacts
 import com.termux.app.event.SystemEventReceiver
 import com.termux.app.reliability.ReliabilityWarningNotifier
 import com.termux.app.reliability.TermuxServiceStopPolicy
@@ -178,6 +179,11 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
         // wake locks and its restored sessions in place: the anchor is entitled to conclude from the
         // first beat that this app is fully up.
         if (BuildConfig.DEVKIT_HOST) {
+            // Recorded here as well as on request, so the file describes the build that is actually
+            // installed even when nobody thought to ask. The shipping gates and `termux-anchor --status`
+            // both read it; see DevKitHostFacts for the measurement that made writing it only on demand
+            // not good enough.
+            DevKitHostFacts.write(this)
             anchorHeartbeat = DevKitHeartbeat(this).also { it.start() }
         }
     }
