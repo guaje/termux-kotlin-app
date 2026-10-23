@@ -1,0 +1,12 @@
+# Termux-Kotlin package feed (unsigned, so [trusted=yes] is required).
+#
+# Install in one command on the device:
+#   echo "deb [trusted=yes] https://raw.githubusercontent.com/guaje/termux-kotlin-app/gh-pages/repo/ ./" \
+#     > "$PREFIX/etc/apt/sources.list.d/termux-kotlin.list"
+#   pkg update
+#
+# That single line is the whole feed for every architecture: the index at the root lists
+# all four builds, each tagged with its Architecture, and apt ignores the ones that are not
+# this device. Do not append the architecture to the URI; downloads are resolved relative to
+# it, so doing so asks for repo/aarch64/aarch64/foo.deb and 404s.
+deb [trusted=yes] https://raw.githubusercontent.com/guaje/termux-kotlin-app/gh-pages/repo/ ./

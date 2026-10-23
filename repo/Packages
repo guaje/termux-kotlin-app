@@ -1,0 +1,136 @@
+Package: termux-api
+Version: 1:0.59.1-1
+Architecture: aarch64
+Maintainer: @termux
+Installed-Size: 316
+Depends: bash, util-linux
+Homepage: https://wiki.termux.com/wiki/Termux:API
+Description: Termux API commands (integrated into Termux-Kotlin app)
+ This package provides command line tools for accessing Android system
+ The API receiver is built into the main Termux-Kotlin app.
+Filename: aarch64/termux-api_1%3a0.59.1-1_aarch64.deb
+Size: 26948
+SHA256: 5e3cc52c20d1426f902affe6342d222efa0c17a2648bc9de3734c8d7731ca020
+
+Package: termux-devkit
+Version: 0.1.0+202610231740
+Architecture: aarch64
+Maintainer: Termux-Kotlin <termux-kotlin@localhost>
+Installed-Size: 64
+Depends: bash, termux-am, termux-tools
+Priority: optional
+Section: shells
+Homepage: https://github.com/guaje/termux-kotlin-app
+Description: Developer kit for Termux-Kotlin (reload, backup, restore, ship)
+ Provides the on-device commands used by the developer loop: termux-reload to
+ re-read configuration in the running app, termux-backup-prefix and
+ termux-restore-prefix to make an app reinstall reversible, termux-ship to
+ prepare, dispatch and reconcile an APK replacement without keeping faith about
+ what state the attempt was in. Everything here is scripts and configuration, so
+ it ships through the package feed and never needs an APK install.
+Filename: aarch64/termux-devkit_0.1.0+202610231740_aarch64.deb
+Size: 15438
+SHA256: e354dbe5884b66840259aff2168433a02dae239be155a2b36aeee4fd8005efed
+
+Package: termux-api
+Version: 1:0.59.1-1
+Architecture: arm
+Maintainer: @termux
+Installed-Size: 316
+Depends: bash, util-linux
+Homepage: https://wiki.termux.com/wiki/Termux:API
+Description: Termux API commands (integrated into Termux-Kotlin app)
+ This package provides command line tools for accessing Android system
+ The API receiver is built into the main Termux-Kotlin app.
+Filename: arm/termux-api_1%3a0.59.1-1_arm.deb
+Size: 26362
+SHA256: 404bc702841a296ac36e0f23ba02b94e4e20014371ee945d35d75d1290ddcf77
+
+Package: termux-devkit
+Version: 0.1.0+202610231740
+Architecture: arm
+Maintainer: Termux-Kotlin <termux-kotlin@localhost>
+Installed-Size: 64
+Depends: bash, termux-am, termux-tools
+Priority: optional
+Section: shells
+Homepage: https://github.com/guaje/termux-kotlin-app
+Description: Developer kit for Termux-Kotlin (reload, backup, restore, ship)
+ Provides the on-device commands used by the developer loop: termux-reload to
+ re-read configuration in the running app, termux-backup-prefix and
+ termux-restore-prefix to make an app reinstall reversible, termux-ship to
+ prepare, dispatch and reconcile an APK replacement without keeping faith about
+ what state the attempt was in. Everything here is scripts and configuration, so
+ it ships through the package feed and never needs an APK install.
+Filename: arm/termux-devkit_0.1.0+202610231740_arm.deb
+Size: 15438
+SHA256: 3fc920b7c6ae80fff9d1909597d84a0d54d2a44c6f8b1f937aa617bef22c4cc2
+
+Package: termux-api
+Version: 1:0.59.1-1
+Architecture: x86_64
+Maintainer: @termux
+Installed-Size: 316
+Depends: bash, util-linux
+Homepage: https://wiki.termux.com/wiki/Termux:API
+Description: Termux API commands (integrated into Termux-Kotlin app)
+ This package provides command line tools for accessing Android system
+ The API receiver is built into the main Termux-Kotlin app.
+Filename: x86_64/termux-api_1%3a0.59.1-1_x86_64.deb
+Size: 26866
+SHA256: 0781992c3ee776fb243025f69a782531930291409c148cf70a470ef2a69474dd
+
+Package: termux-devkit
+Version: 0.1.0+202610231740
+Architecture: x86_64
+Maintainer: Termux-Kotlin <termux-kotlin@localhost>
+Installed-Size: 64
+Depends: bash, termux-am, termux-tools
+Priority: optional
+Section: shells
+Homepage: https://github.com/guaje/termux-kotlin-app
+Description: Developer kit for Termux-Kotlin (reload, backup, restore, ship)
+ Provides the on-device commands used by the developer loop: termux-reload to
+ re-read configuration in the running app, termux-backup-prefix and
+ termux-restore-prefix to make an app reinstall reversible, termux-ship to
+ prepare, dispatch and reconcile an APK replacement without keeping faith about
+ what state the attempt was in. Everything here is scripts and configuration, so
+ it ships through the package feed and never needs an APK install.
+Filename: x86_64/termux-devkit_0.1.0+202610231740_x86_64.deb
+Size: 15442
+SHA256: 98e0cd84ea3678f6321e6c250feaed9df1d2fc760f86892f54b2b25f94636324
+
+Package: termux-api
+Version: 1:0.59.1-1
+Architecture: i686
+Maintainer: @termux
+Installed-Size: 316
+Depends: bash, util-linux
+Homepage: https://wiki.termux.com/wiki/Termux:API
+Description: Termux API commands (integrated into Termux-Kotlin app)
+ This package provides command line tools for accessing Android system
+ The API receiver is built into the main Termux-Kotlin app.
+Filename: i686/termux-api_1%3a0.59.1-1_i686.deb
+Size: 27104
+SHA256: 808ab10e1ec9fbe523064b8aaa22766e149f0e7426c9507517f3a9d5eebffdbb
+
+Package: termux-devkit
+Version: 0.1.0+202610231740
+Architecture: i686
+Maintainer: Termux-Kotlin <termux-kotlin@localhost>
+Installed-Size: 64
+Depends: bash, termux-am, termux-tools
+Priority: optional
+Section: shells
+Homepage: https://github.com/guaje/termux-kotlin-app
+Description: Developer kit for Termux-Kotlin (reload, backup, restore, ship)
+ Provides the on-device commands used by the developer loop: termux-reload to
+ re-read configuration in the running app, termux-backup-prefix and
+ termux-restore-prefix to make an app reinstall reversible, termux-ship to
+ prepare, dispatch and reconcile an APK replacement without keeping faith about
+ what state the attempt was in. Everything here is scripts and configuration, so
+ it ships through the package feed and never needs an APK install.
+Filename: i686/termux-devkit_0.1.0+202610231740_i686.deb
+Size: 15438
+SHA256: 49ae25e25836980dfb9d12e58880d6d1714f5bbf069f1fee254aaec2ceb832e8
+
