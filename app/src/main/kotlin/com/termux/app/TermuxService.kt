@@ -346,6 +346,10 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
     /** Process action to stop service. */
     private fun actionStopService() {
         mWantsToStop = true
+        // Tell the supervisor before anything else tears down, while the broadcast can still be delivered:
+        // this is the only moment at which "the user closed it" is knowable at all, and the anchor needs it
+        // to leave the app closed. Silence on its own cannot tell an exit from a crash.
+        anchorHeartbeat?.markStoppedByUser()
         // A deliberate exit must never resurrect the sessions that were running before it.
         clearRestorableSessionsSnapshot()
         TermuxSshAgent.stop()

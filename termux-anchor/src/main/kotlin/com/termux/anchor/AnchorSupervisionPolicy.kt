@@ -30,6 +30,9 @@ object AnchorSupervisionPolicy {
     /** One stale window is enough time for a visible rescue request to remain available. */
     const val OVERLAY_TTL_MS: Long = 45_000L
 
+    /** What [AnchorState.readBootId] falls back to, and therefore not evidence of a reboot. */
+    const val UNKNOWN_BOOT_ID: String = "unknown"
+
     /**
      * 45 s * 2^6 = 48 min, already past the ceiling, so rung 6 is the last one the ladder can need and
      * the shift below never reaches a width where it could overflow.
@@ -141,11 +144,28 @@ object AnchorSupervisionPolicy {
          * immediately, which turns backoff into hammering exactly during the failure it is meant to
          * space out.
          */
-        val lastAttemptMs: Long = 0L
+        val lastAttemptMs: Long = 0L,
+        /**
+         * The boot the last beat was sent from, which turns "the device restarted" from an inference into a
+         * comparison. Blank for a beat from a build that did not send one, which means "cannot tell".
+         */
+        val lastHeartbeatBootId: String = "",
+        /** Whether the last beat said the user stopped the app on purpose. */
+        val closedByUser: Boolean = false
     )
 
     /** The decision, plus the sentence a human reads in the notification and in the ledger. */
-    data class Report(val action: Action, val reason: String, val retryAfterMs: Long)
+    /**
+     * `standsDown` marks the holds that are the user's decision rather than a measurement: the anchor has
+     * nothing to watch until the user opens Termux again, so it should say so once and then stop running,
+     * instead of keeping a notification alive for a choice somebody else made.
+     */
+    data class Report(
+        val action: Action,
+        val reason: String,
+        val retryAfterMs: Long,
+        val standsDown: Boolean = false
+    )
 
     /**
      * The first rule that has an opinion decides the outcome; null means "this rule is satisfied".
@@ -157,6 +177,8 @@ object AnchorSupervisionPolicy {
     fun decide(watch: Watch): Report {
         val attempts = attemptsToActOn(watch)
         return noHeartbeatEverSeen(watch)
+            ?: leftClosedByUser(watch)
+            ?: deviceRestartedSinceTheLastBeat(watch)
             ?: clockBehindLastHeartbeat(watch)
             ?: heartbeatStillCurrent(watch)
             ?: theAppSaidNo(watch)
@@ -218,6 +240,69 @@ object AnchorSupervisionPolicy {
      * arithmetic comparison that the clock itself has invalidated, and the failure to avoid is the
      * loud one: restarting the app because a setting changed.
      */
+    /**
+     * The user closed this app from its own notification, so it stays closed until the user opens it again.
+     *
+     * This outranks every measurement in the file because it is not a measurement: it is an instruction, and
+     * it arrives on the beat sent while the service was still alive. A supervisor that relaunches what it was
+     * explicitly told to leave alone is not supervising anything, it is nagging - which is exactly what this
+     * handset reported before the rule existed, once for the exit and once again after every reboot.
+     *
+     * Two things it cannot cover, both stated rather than glossed. A force stop from the system settings runs
+     * no code here, so it is indistinguishable from a vendor cull and will still be treated as a death; and a
+     * crash of course says nothing. The lever for both is the policy file in the prefix, which says never.
+     */
+    private fun leftClosedByUser(watch: Watch): Report? {
+        if (!watch.closedByUser) return null
+        return Report(
+            Action.HOLD,
+            "the user stopped this app on purpose, so it stays stopped until the user starts it again; " +
+                "a beat without that flag is what resumes supervision, not a quiet 45 seconds",
+            CHECK_INTERVAL_MS,
+            standsDown = true
+        )
+    }
+
+    /**
+     * The last beat came from a different boot than this one, so the device has restarted and nobody has
+     * opened the app since. Waiting for the user is a decision, not a gap in the logic: a reboot is the one
+     * event after which the app's absence is the expected state, and a supervisor that treats the expected
+     * state as an emergency starts an app the user never asked to see on every unlock.
+     *
+     * Unreadable boot ids do not count as a change. `/proc/sys/kernel/random/boot_id` is world readable and
+     * has never failed here, but a guard that fired on the string "unknown" would turn a hypothetical read
+     * failure into supervision being switched off for good, and that is the wrong way to fail.
+     */
+    private fun deviceRestartedSinceTheLastBeat(watch: Watch): Report? {
+        if (!bootChanged(previousBootId = watch.lastHeartbeatBootId, currentBootId = watch.bootId)) return null
+        return Report(
+            Action.HOLD,
+            "the device restarted since this app last reported, and the user has not opened it yet in this " +
+                "boot; opening Termux is what resumes supervision, because the beat it sends arrives with " +
+                "this boot id (beat from boot " + shortBootId(watch.lastHeartbeatBootId) +
+                ", this boot " + shortBootId(watch.bootId) + ")",
+            CHECK_INTERVAL_MS,
+            standsDown = true
+        )
+    }
+
+    /**
+     * Whether the device has started a new boot between two observations, and neither observation is unknown.
+     *
+     * Expressed as a question about two strings rather than inline in the guard, because the two failure
+     * directions deserve different answers and only one of them is testable from the outside: an absent
+     * observation means "cannot tell", while an unreadable one means "assume nothing changed".
+     */
+    fun bootChanged(previousBootId: String, currentBootId: String): Boolean =
+        previousBootId.isNotBlank() &&
+            currentBootId.isNotBlank() &&
+            previousBootId != UNKNOWN_BOOT_ID &&
+            currentBootId != UNKNOWN_BOOT_ID &&
+            previousBootId != currentBootId
+
+    /** Enough of a boot id to recognise in a log line, without filling a notification with a uuid. */
+    private fun shortBootId(bootId: String): String = bootId.take(8) + "\u2026"
+
     private fun clockBehindLastHeartbeat(watch: Watch): Report? {
         val ageMs = watch.nowMs - watch.lastHeartbeatMs
         if (watch.lastHeartbeatMs <= 0L || ageMs >= 0L) return null

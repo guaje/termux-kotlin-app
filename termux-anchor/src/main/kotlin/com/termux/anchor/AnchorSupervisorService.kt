@@ -114,7 +114,27 @@ class AnchorSupervisorService : Service() {
             state.recordHold(snapshot, bootId, report.reason)
             writtenReason = report.reason
         }
+        if (report.standsDown) {
+            standDown()
+            return
+        }
         show(report.reason)
+    }
+
+    /**
+     * Stop watching, having said why once.
+     *
+     * Once the anchor has decided that the next move belongs to the user, running costs a permanent foreground
+     * notification for a decision that was not its own, which is the same complaint as relaunching the app with
+     * extra steps. Nothing is given up that matters: the app's own beat starts this service again, and so does
+     * the heartbeat receiver, so supervision resumes the moment the user opens Termux rather than the moment the
+     * anchor happens to feel like it (MEMORY.md §17 measured that direction of the wake-up working).
+     */
+    private fun standDown() {
+        Log.i(TAG, "leaving the decision with the user, and stopping the loop that was watching for a death")
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        handler.removeCallbacksAndMessages(null)
+        stopSelf()
     }
 
     /** Nothing to act on. The notification says "watching", because that is all that is true. */

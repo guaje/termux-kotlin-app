@@ -31,4 +31,7 @@ object AnchorMessages {
 
     /** int: the app's answer to "may you restart me", see [AnchorSupervisionPolicy.RestartPolicy]. */
     const val EXTRA_POLICY: String = "com.termux.anchor.extra.POLICY"
+
+    /** True on the one beat that accompanies a stop the user asked for. Absent means "still running". */
+    const val EXTRA_USER_STOPPED: String = "com.termux.anchor.extra.USER_STOPPED"
 }
