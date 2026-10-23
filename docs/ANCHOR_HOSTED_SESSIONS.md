@@ -1,5 +1,19 @@
 # Hosting sessions in the anchor, with Termux as the client
 
+> **Superseded 2026-10-22, and superseded for a good reason.** The direction that got built into `PLAN.md` is
+> the inverse: the **server stays `com.termux`** and a **new thin client** (`com.termux.______`) renders its
+> sessions. Two facts the recon turned up made that the cheaper design, and they are worth keeping here because
+> they are also the reason the argument below was incomplete: `:terminal-view` and `:terminal-emulator` depend
+> on neither `:app` nor `:termux-shared`, so a client is a library consumer rather than a fork of the app; and a
+> `TerminalSession` already does not require a viewer (`TermuxTerminalSessionServiceClient` exists, and
+> `TermuxService.setTermuxTerminalSessionClient()` already attaches and detaches viewers), so "the viewer may
+> die" is true by construction rather than something to build. Hosting the sessions in the anchor would inherit
+> this document's central problem for the material that most needs updating; hosting them in `com.termux` keeps
+> `$PREFIX`, `$HOME` and every dotfile exactly where they are. The transport question, which this document got
+> right to be suspicious about, is answered by AIDL plus a `ParcelFileDescriptor` over an unnamed socketpair -
+> permitted between two untrusted apps by AOSP sepolicy and authenticated by the binder call itself, so no
+> token and no listening port are needed.
+
 The proposal: stop treating `com.termux.anchor` as a watchdog and make it the **session host** - tmux, the
 shells, the agents - while `com.termux` becomes the terminal that attaches to them. Then replacing
 `com.termux` to ship a build kills only the viewer, and an agent mid-edit can watch its terminal vanish and
