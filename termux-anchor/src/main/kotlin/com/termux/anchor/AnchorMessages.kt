@@ -14,6 +14,13 @@ object AnchorMessages {
     /** The app being supervised. Named by the `<queries>` block in the anchor's manifest. */
     const val TERMUX_PACKAGE: String = "com.termux"
 
+    /**
+     * The terminal activity by name, for the restart route. A server that keeps its activity but drops the
+     * LAUNCHER category - which is what a headless build does - has no launch intent at all, so the component
+     * has to be tried first or supervision would quietly stop being possible.
+     */
+    const val TERMUX_ACTIVITY_CLASS: String = "com.termux.app.TermuxActivity"
+
     /** This package. Hardcoded rather than read from Context, so that a variant cannot drift. */
     const val ANCHOR_PACKAGE: String = "com.termux.anchor"
 

@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Color
@@ -326,9 +327,14 @@ class AnchorSupervisorService : Service() {
      * of the launch request, which is how it is used.
      */
     private fun requestTermuxForeground(): Result<Unit> = runCatching {
-        val launch = packageManager.getLaunchIntentForPackage(AnchorMessages.TERMUX_PACKAGE)
-            ?: error("no launch intent for ${AnchorMessages.TERMUX_PACKAGE}; it is not installed, or not " +
-                "visible through this package's <queries> block")
+        val explicit = ComponentName(AnchorMessages.TERMUX_PACKAGE, AnchorMessages.TERMUX_ACTIVITY_CLASS)
+        val launch = if (runCatching { packageManager.getActivityInfo(explicit, 0) }.isSuccess) {
+            Intent().setComponent(explicit)
+        } else {
+            packageManager.getLaunchIntentForPackage(AnchorMessages.TERMUX_PACKAGE)
+                ?: error("no launch intent for ${AnchorMessages.TERMUX_PACKAGE}; it is not installed, or not " +
+                    "visible through this package's <queries> block")
+        }
         launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         startActivity(launch)
     }
