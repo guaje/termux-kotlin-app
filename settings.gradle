@@ -16,6 +16,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "termux-kotlin-app"
-// :termux-anchor is a second APK (com.termux.anchor) with its own uid, not a library: see its
-// build.gradle for why it depends on none of the others.
-include ':app', ':termux-shared', ':terminal-emulator', ':terminal-view', ':termux-anchor'
+include ':app', ':termux-shared', ':terminal-emulator', ':terminal-view'

@@ -49,6 +49,7 @@
 ## [Unreleased]
 
 ### Changes
+- Removed the separate supervisor APK (`com.termux.anchor`), its `termux-anchor` command and its settings surface. Its rules survive as `com.termux.app.supervision` with all 28 tests, and the goodbye the app used to broadcast is now a file. **Uninstall the anchor from any device that has it**, or it will keep reviving an app that can no longer answer it.
 - Closing Termux by typing `exit` in every session now tells the supervisor it was you, so the app stays closed. Only the drawer's Exit button used to say so, and to a supervisor silence looks exactly like a crash.
 - Seven call sites that opened a terminal now ask one resolver instead of naming `TermuxActivity` directly, so the day this app stops shipping a terminal activity is a change of route rather than seven ways to break. Covered by four tests over the resolver's ordering; the anchor's restart route now tries an explicit component before a launch intent.
 - The anchor leaves Termux closed when the user closed it, and after a reboot until the user opens it, and stops its own foreground service while waiting instead of keeping a notification up for somebody else's decision. `termux-anchor --restart never|enabled-only|always` puts the restart policy in the user's hands directly.

@@ -1,12 +1,12 @@
-package com.termux.anchor
+package com.termux.app.supervision
 
 /**
- * The rules that decide whether the anchor asks the platform to bring Termux back, with nothing
+ * The rules that decide whether the supervisor asks the platform to bring Termux back, with nothing
  * Android in them - the same split as `DevKitShipPolicy` in the app: the rules are the part worth
  * testing, so they run on the JVM, and the service that calls them stays a thin wrapper over a
  * Context, a Handler and a file.
  *
- * What this object is not is a guarantee about the app. The anchor cannot observe a running Termux; it
+ * What this object is not is a guarantee about the app. The supervisor cannot observe a running Termux; it
  * can only observe the absence of a heartbeat. Every answer below therefore describes what was seen
  * and never asserts what is true - in particular HOLD and WAIT must not be read as "Termux is fine",
  * only as "what is on record does not justify a restart yet".
@@ -16,7 +16,7 @@ package com.termux.anchor
  * something else. The rules below are conservative for that reason, and the stale threshold is a
  * delay rather than a judgement.
  */
-object AnchorSupervisionPolicy {
+object SupervisionPolicy {
 
     /** How long a heartbeat has to be missing before "quiet" is treated as "down". */
     const val STALE_MS: Long = 45_000L
@@ -30,7 +30,7 @@ object AnchorSupervisionPolicy {
     /** One stale window is enough time for a visible rescue request to remain available. */
     const val OVERLAY_TTL_MS: Long = 45_000L
 
-    /** What [AnchorState.readBootId] falls back to, and therefore not evidence of a reboot. */
+    /** What [SupervisionState.readBootId] falls back to, and therefore not evidence of a reboot. */
     const val UNKNOWN_BOOT_ID: String = "unknown"
 
     /**
@@ -78,7 +78,7 @@ object AnchorSupervisionPolicy {
 
     /**
      * What the app said about whether it may be restarted, carried in every heartbeat as
-     * [AnchorMessages.EXTRA_POLICY].
+     * [SupervisionSignals.EXTRA_POLICY].
      *
      * The value comes from the app because the app knows why it is quiet. A user who stopped the
      * service from the notification is not a crash, and a supervisor that disagreed with that would be
@@ -86,10 +86,10 @@ object AnchorSupervisionPolicy {
      */
     enum class RestartPolicy {
 
-        /** Restart whenever the heartbeat stops, whatever the anchor's own switch says. */
+        /** Restart whenever the heartbeat stops, whatever the supervisor's own switch says. */
         ALWAYS,
 
-        /** Restart only if the user turned supervision on in the anchor's own UI. */
+        /** Restart only if the user turned supervision on in the supervisor's own UI. */
         ONLY_WHEN_USER_ENABLED,
 
         /** Never restart: this app is being stopped on purpose. */
@@ -120,7 +120,7 @@ object AnchorSupervisionPolicy {
     }
 
     /**
-     * Everything the rules read, all of it already recorded by [AnchorState].
+     * Everything the rules read, all of it already recorded by [SupervisionState].
      *
      * [lastHeartbeatMs] is 0 when no heartbeat has ever arrived, which is a different state from a
      * stale one and the only one this anchor refuses to act on.
@@ -156,7 +156,7 @@ object AnchorSupervisionPolicy {
 
     /** The decision, plus the sentence a human reads in the notification and in the ledger. */
     /**
-     * `standsDown` marks the holds that are the user's decision rather than a measurement: the anchor has
+     * `standsDown` marks the holds that are the user's decision rather than a measurement: the supervisor has
      * nothing to watch until the user opens Termux again, so it should say so once and then stop running,
      * instead of keeping a notification alive for a choice somebody else made.
      */
@@ -211,7 +211,7 @@ object AnchorSupervisionPolicy {
      * A reboot clears the ladder. The restart that is being waited out may be the one the user asked
      * for by powering the phone back on, and the platform has by then already done the thing the
      * backoff exists to space out: every process is gone and boot has completed. Carrying the count
-     * across that would leave the anchor sitting on a 30 minute ceiling for a device that just
+     * across that would leave the supervisor sitting on a 30 minute ceiling for a device that just
      * restarted itself.
      */
     fun attemptsToActOn(watch: Watch): Int {
@@ -333,7 +333,7 @@ object AnchorSupervisionPolicy {
                 null
             } else {
                 "the app reports policy ${RestartPolicy.WIRE_ONLY_WHEN_USER_ENABLED}: restart only " +
-                    "what the user asked for, and supervision is switched off in the anchor"
+                    "what the user asked for, and supervision is switched off in the supervisor"
             }
         }
         return refusal?.let { Report(Action.HOLD, it, CHECK_INTERVAL_MS) }

@@ -19,6 +19,13 @@ import java.util.Locale
  * by the same key that is installed and carries a higher version code. So the app records those facts
  * here and the tooling reads them, instead of each script guessing from a file name.
  *
+ * There is a second, smaller file here: [userStoppedFile], the app's own account of *why* it stopped.
+ * It used to travel as a broadcast flag to the supervisor APK, and the APK is gone. A file was kept
+ * rather than the fact, because a fact only the living can broadcast is a fact nobody can read
+ * afterwards, and because a marker on disk costs nothing while a heartbeat costs four broadcasts a
+ * minute forever. Whoever supervises next - the client, most likely - reads this and does not have to
+ * infer intent from silence, which is the mistake that made the app come back after `exit`.
+ *
  * Written when the service starts, not only when something asks for it. That is a measured correction:
  * with the file produced only by `--scope devkit` and the ship gates, it went stale in the ordinary
  * course of events, and `termux-anchor --status` printed host facts for 2.5.3-alpha.18 while 2.5.3-alpha.20
@@ -94,6 +101,8 @@ object DevKitHostFacts {
             Logger.logWarn(LOG_TAG, "could not create $statusDir, so host facts were not written")
             return false
         }
+        file().parentFile?.let { it.isDirectory || it.mkdirs() }
+        userStoppedFile().delete()  // a start means the user opened it again; see [userStoppedFile]
         val target = file()
         val temp = File(statusDir, target.name + ".tmp")
         return runCatching {
@@ -103,6 +112,26 @@ object DevKitHostFacts {
                 temp.delete()
             }
         }.onFailure { Logger.logWarn(LOG_TAG, "host facts could not be written to $target: ${it.message}") }
+            .isSuccess
+    }
+
+    /**
+     * The app's own account that it was closed by the user rather than killed. Exists between a goodbye
+     * and the next service start, and nothing else; deleted by [write], because a start is the user
+     * having opened the app again and the claim does not survive that.
+     *
+     * Contains the boot id and the moment, so a reader can tell "the user closed it during this boot"
+     * from "somebody closed it before the phone was restarted" - after a reboot, not closing it again is
+     * not consent to start it.
+     */
+    fun userStoppedFile(): File = File(statusDir, "user-stopped")
+
+    /** Record that the user closed this app on purpose. See [userStoppedFile] for how long that lasts. */
+    fun markUserStopped(): Boolean {
+        if (!statusDir.isDirectory && !statusDir.mkdirs()) return false
+        val line = "${readBootId()} ${TIMESTAMP.format(Date())}"
+        return runCatching { userStoppedFile().writeText(line) }
+            .onFailure { Logger.logWarn(LOG_TAG, "could not record the user stop: ${it.message}") }
             .isSuccess
     }
 

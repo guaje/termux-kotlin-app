@@ -25,7 +25,7 @@ REPO_DIR="${1:-$SCRIPT_DIR/../repo}"
 # advertises one build while pointing at another.
 EXPECTED_VERSION="${TERMUX_DEBKIT_VERSION:-}"
 PREFIX="/data/data/com.termux/files/usr"
-COMMANDS=(termux-reload termux-backup-prefix termux-restore-prefix termux-ship termux-anchor)
+COMMANDS=(termux-reload termux-backup-prefix termux-restore-prefix termux-ship)
 ARCHITECTURES=(aarch64 arm x86_64 i686)
 
 if [[ ! -d "$REPO_DIR" ]]; then
