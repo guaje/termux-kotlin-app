@@ -138,7 +138,7 @@ EOF
     verify="$WORK_DIR/verify-$arch"
     mkdir -p "$verify"
     dpkg-deb -x "$WORK_DIR/$deb_name" "$verify"
-    for script in termux-reload termux-backup-prefix termux-restore-prefix termux-ship termux-anchor; do
+    for script in termux-reload termux-backup-prefix termux-restore-prefix termux-ship; do
         if [ ! -f "$verify$PREFIX/bin/$script" ]; then
             echo "ERROR: $deb_name does not contain bin/$script" >&2
             exit 1

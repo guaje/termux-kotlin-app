@@ -136,13 +136,13 @@ jobs:
           keyPassword=$KEY_PASSWORD
           EOF
 
-      # Qualified to :app on purpose. The release train is the app alone: :termux-anchor builds an APK
-      # with its own applicationId, its own versionCode and its own update channel, and an unqualified
-      # assembleRelease would sign it with the release key, pass every assertion below (they all read
-      # app/build/outputs/apk/release), and then attach nothing - or, worse, whatever a later globbing
-      # change made it attach - to a published release. The anchor is deliberately not on this rail yet:
-      # nothing decides where its APKs are published from, and a supervisor APK nobody can point at is a
-      # better state than one published without a plan.
+      # Qualified to :app on purpose, which also documents what this rail publishes: the app and nothing
+      # else. A second APK used to sit in this repository, with its own applicationId, its own versionCode
+      # and its own update channel, and an unqualified assembleRelease would have signed it with the
+      # release key, passed every assertion below (they all read app/build/outputs/apk/release), and then
+      # attached nothing - or, worse, whatever a later globbing change made it attach - to a published
+      # release. The qualification is kept because the same reasoning will apply to the next second APK:
+      # a rail that publishes one artifact should say so in the command that builds it.
       - name: Build release APKs
         run: ./gradlew --no-daemon :app:assembleRelease
 

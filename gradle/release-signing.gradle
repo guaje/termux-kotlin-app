@@ -2,7 +2,7 @@
  * The release signing configuration, in exactly one place.
  *
  * Every APK this repository publishes must carry the same release certificate, and that is not a
- * packaging nicety. The channel between the app and the supervisor anchor (com.termux.anchor.permission.CONTROL)
+ * packaging nicety. The channel between this app and whatever supervises it (once a signature-level
  * is a signature-level permission, which means the sender and the receiver are authenticated by
  * nothing but their signing key. An anchor signed by a different key is therefore not a weaker
  * supervisor: it silently never receives a heartbeat, looks healthy, and the pair is worse than the

@@ -7,7 +7,7 @@ plugins {
     alias(libs.plugins.hilt)
 }
 
-// Defines signingConfigs.release. Shared with :termux-anchor because the permission that crosses
+// Defines signingConfigs.release. Kept in gradle/ so any future second APK can sign with the same
 // between the two APKs is signature-level, so one certificate has to mean both of them - see the
 // header of the script for what a divergence costs.
 apply from: "$rootDir/gradle/release-signing.gradle"
@@ -100,7 +100,7 @@ android {
             storePassword 'xrj45yWGLbsO7W0v'
             keyPassword 'xrj45yWGLbsO7W0v'
         }
-        // signingConfigs.release is contributed by gradle/release-signing.gradle, which :termux-anchor
+        // signingConfigs.release is contributed by gradle/release-signing.gradle, which also documents
         // applies too. Keep it there.
     }
 

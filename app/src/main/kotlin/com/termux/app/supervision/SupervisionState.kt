@@ -1,14 +1,14 @@
-package com.termux.anchor
+package com.termux.app.supervision
 
 import android.content.Context
 import android.content.SharedPreferences
 import java.io.File
 
 /**
- * What the anchor has seen and done, in its own private storage.
+ * What the supervisor has seen and done, in its own private storage.
  *
  * Two files, because they answer two different questions and one of them must not grow.
- * `supervision.json` is the current state that [AnchorSupervisionPolicy] reads, and it is replaced
+ * `supervision.json` is the current state that [SupervisionPolicy] reads, and it is replaced
  * whole through a temporary file plus a rename - the same doctrine as `DevKitReloadCoordinator` in the
  * app, for the same reason: a reader that polls this path must never observe half a document, and the
  * anchor's reader is the loop that decides whether the user's session is coming back.
@@ -20,10 +20,10 @@ import java.io.File
  * here, and truncation is bounded: 600 lines triggers a rewrite that keeps the last 500.
  *
  * The user's own switch lives in SharedPreferences rather than in the JSON file because it is the
- * anchor's answer to the user, not the app's answer to the anchor, and because [AnchorActivity] and
+ * anchor's answer to the user, not the app's answer to the supervisor, and because [AnchorActivity] and
  * the supervisor loop both read it through this class so that the key exists once.
  */
-class AnchorState(context: Context) {
+class SupervisionState(context: Context) {
 
     private val stateFile = File(context.filesDir, STATE_FILE_NAME)
     private val ledgerFile = File(context.filesDir, LEDGER_FILE_NAME)
@@ -38,7 +38,7 @@ class AnchorState(context: Context) {
         val attempts: Int = 0,
         val attemptBootId: String = "",
         val lastAttemptMs: Long = 0L,
-        val policyFromApp: Int = AnchorSupervisionPolicy.RestartPolicy.WIRE_ALWAYS,
+        val policyFromApp: Int = SupervisionPolicy.RestartPolicy.WIRE_ALWAYS,
         /**
          * Whether the last beat said "the user stopped me". Kept until a beat says otherwise, which is how
          * a deliberate exit outlasts the process that reported it, and why a relaunch needs the user rather
@@ -46,17 +46,17 @@ class AnchorState(context: Context) {
          */
         val userStopped: Boolean = false
     ) {
-        /** The same facts in the shape [AnchorSupervisionPolicy] reads. */
+        /** The same facts in the shape [SupervisionPolicy] reads. */
         fun toWatch(
             nowMs: Long,
             supervisionEnabled: Boolean,
             currentBootId: String
-        ): AnchorSupervisionPolicy.Watch = AnchorSupervisionPolicy.Watch(
+        ): SupervisionPolicy.Watch = SupervisionPolicy.Watch(
             nowMs = nowMs,
             lastHeartbeatMs = lastHeartbeatMs,
             supervisionEnabled = supervisionEnabled,
             consecutiveRestartAttempts = attempts,
-            policyFromApp = AnchorSupervisionPolicy.RestartPolicy.fromWire(policyFromApp),
+            policyFromApp = SupervisionPolicy.RestartPolicy.fromWire(policyFromApp),
             bootId = currentBootId,
             lastAttemptBootId = attemptBootId,
             lastAttemptMs = lastAttemptMs,
@@ -184,7 +184,7 @@ class AnchorState(context: Context) {
     /**
      * Keep the ledger bounded.
      *
-     * The anchor runs for months on a phone that is restarted by an agent loop every few minutes, and a
+     * The supervisor runs for months on a phone that is restarted by an agent loop every few minutes, and a
      * log nobody reads that eventually fills the partition would take the app down with it: the two
      * packages share the device, not the uid, but they share the disk. The read is not cheap, so it is
      * only done once the file has passed the trigger size.
@@ -261,7 +261,7 @@ class AnchorState(context: Context) {
          * The device's identity for this boot, read the same way `DevKitReloadCoordinator` reads it.
          *
          * It is what proves a reboot happened, and it is read from the same file on both sides, so the
-         * app's copy in the heartbeat and the anchor's own copy are the same string by construction.
+         * app's copy in the heartbeat and the supervisor's own copy are the same string by construction.
          */
         fun readBootId(): String = runCatching {
             File("/proc/sys/kernel/random/boot_id").readText().trim()

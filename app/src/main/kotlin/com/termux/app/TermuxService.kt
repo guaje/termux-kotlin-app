@@ -16,7 +16,6 @@ import android.os.Looper
 import android.os.PowerManager
 import com.termux.BuildConfig
 import com.termux.R
-import com.termux.app.devkit.DevKitHeartbeat
 import com.termux.app.devkit.DevKitHostFacts
 import com.termux.app.event.SystemEventReceiver
 import com.termux.app.reliability.ReliabilityWarningNotifier
@@ -119,10 +118,9 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
      * The reporter for the supervisor anchor APK, or null on every build that may not speak to it.
      *
      * Only ever constructed when [BuildConfig.DEVKIT_HOST], which is true of the `dev` variant alone, and
-     * only ever useful when `com.termux.anchor` is installed on the device. See [DevKitHeartbeat] for what
+     * only ever useful when something on the device is supervising. See [DevKitHostFacts.userStoppedFile]
      * it is for and why the anchor has to be a separate APK with its own uid.
      */
-    private var anchorHeartbeat: DevKitHeartbeat? = null
 
     /**
      * The preferences of the app, built once per instance of the service.
@@ -186,11 +184,10 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
         // first beat that this app is fully up.
         if (BuildConfig.DEVKIT_HOST) {
             // Recorded here as well as on request, so the file describes the build that is actually
-            // installed even when nobody thought to ask. The shipping gates and `termux-anchor --status`
+            // installed even when nobody thought to ask. The shipping gates and `termux-ship --status`
             // both read it; see DevKitHostFacts for the measurement that made writing it only on demand
             // not good enough.
             DevKitHostFacts.write(this)
-            anchorHeartbeat = DevKitHeartbeat(this).also { it.start() }
         }
     }
 
@@ -296,8 +293,6 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
 
         // Stop reporting, so that an anchor which outlives this service does not keep being told the app
         // is alive by a handler in a service that is going away.
-        anchorHeartbeat?.stop()
-        anchorHeartbeat = null
 
         runStopForeground()
     }
@@ -355,7 +350,7 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
         // Tell the supervisor before anything else tears down, while the broadcast can still be delivered:
         // this is the only moment at which "the user closed it" is knowable at all, and the anchor needs it
         // to leave the app closed. Silence on its own cannot tell an exit from a crash.
-        anchorHeartbeat?.markStoppedByUser()
+        DevKitHostFacts.markUserStopped()
         // A deliberate exit must never resurrect the sessions that were running before it.
         clearRestorableSessionsSnapshot()
         TermuxSshAgent.stop()
@@ -1177,8 +1172,11 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
             // the app is usually actually closed and which used to leave the supervisor with nothing but
             // silence. Silence reads as a crash to a supervisor, and it brought the app straight back.
             if (TermuxServiceStopPolicy.countsAsUserClosingTheApp(mWantsToStop, lastSessionExitStatus)) {
-                Logger.logDebug(LOG_TAG, "the last shell exited cleanly; telling the supervisor this was the user")
-                anchorHeartbeat?.markStoppedByUser()
+                // Left on disk rather than broadcast: see [DevKitHostFacts.userStoppedFile]. The point is
+                // unchanged from when a supervisor APK was listening - that it must not have to guess
+                // whether it was closed or killed - and the guess is still the expensive failure.
+                Logger.logDebug(LOG_TAG, "the last shell exited cleanly; recording this as a user exit")
+                DevKitHostFacts.markUserStopped()
             }
             requestStopService()
         } else {

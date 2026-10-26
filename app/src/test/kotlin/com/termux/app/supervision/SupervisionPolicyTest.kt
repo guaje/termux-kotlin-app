@@ -1,18 +1,18 @@
-package com.termux.anchor
+package com.termux.app.supervision
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import com.termux.anchor.AnchorSupervisionPolicy.Action.HOLD
-import com.termux.anchor.AnchorSupervisionPolicy.Action.RESTART
-import com.termux.anchor.AnchorSupervisionPolicy.Action.WAIT
-import com.termux.anchor.AnchorSupervisionPolicy.RescueMethod.LAUNCH_ONLY
-import com.termux.anchor.AnchorSupervisionPolicy.RescueMethod.OVERLAY_AND_LAUNCH
-import com.termux.anchor.AnchorSupervisionPolicy.RestartPolicy
+import com.termux.app.supervision.SupervisionPolicy.Action.HOLD
+import com.termux.app.supervision.SupervisionPolicy.Action.RESTART
+import com.termux.app.supervision.SupervisionPolicy.Action.WAIT
+import com.termux.app.supervision.SupervisionPolicy.RescueMethod.LAUNCH_ONLY
+import com.termux.app.supervision.SupervisionPolicy.RescueMethod.OVERLAY_AND_LAUNCH
+import com.termux.app.supervision.SupervisionPolicy.RestartPolicy
 
 /**
- * The rules that decide whether the anchor wakes Termux.
+ * The rules that decide whether the supervisor wakes Termux.
  *
  * These are the rules the handset will be judged by, and the cost of getting one wrong is either a
  * session the user has to restart by hand or a phone that throws a Termux window over what they are
@@ -20,9 +20,9 @@ import com.termux.anchor.AnchorSupervisionPolicy.RestartPolicy
  * reason they are here instead of inline in the service.
  *
  * Everything is expressed as an age of the last heartbeat rather than as absolute times, because that is
- * the only quantity the anchor can actually observe: it never sees the app, only reports from it.
+ * the only quantity the supervisor can actually observe: it never sees the app, only reports from it.
  */
-class AnchorSupervisionPolicyTest {
+class SupervisionPolicyTest {
 
     private fun secondsAgo(seconds: Long): Long = NOW - seconds * 1000L
 
@@ -36,8 +36,8 @@ class AnchorSupervisionPolicyTest {
         lastAttemptMs: Long = 0L,
         lastHeartbeatBootId: String = "",
         userStopped: Boolean = false
-    ) = AnchorSupervisionPolicy.decide(
-        AnchorSupervisionPolicy.Watch(
+    ) = SupervisionPolicy.decide(
+        SupervisionPolicy.Watch(
             nowMs = NOW,
             lastHeartbeatMs = lastHeartbeatMs,
             supervisionEnabled = supervisionEnabled,
@@ -51,27 +51,27 @@ class AnchorSupervisionPolicyTest {
         )
     )
 
-    private fun assertExplains(report: AnchorSupervisionPolicy.Report, fragment: String) {
+    private fun assertExplains(report: SupervisionPolicy.Report, fragment: String) {
         assertTrue("\"${report.reason}\" did not mention \"$fragment\"", report.reason.contains(fragment))
     }
 
     /** Without this choice, a held overlay right would not change a background attempt's eligible route. */
     @Test
     fun anOverlayRightChoosesAVisibleWindowBeforeTheLaunch() {
-        assertEquals(OVERLAY_AND_LAUNCH, AnchorSupervisionPolicy.rescueMethod(canDrawOverlays = true))
+        assertEquals(OVERLAY_AND_LAUNCH, SupervisionPolicy.rescueMethod(canDrawOverlays = true))
     }
 
     /** Without this fallback, refusing or revoking the right would prevent even the best-effort request. */
     @Test
     fun noOverlayRightStillChoosesTheBlindLaunch() {
-        assertEquals(LAUNCH_ONLY, AnchorSupervisionPolicy.rescueMethod(canDrawOverlays = false))
+        assertEquals(LAUNCH_ONLY, SupervisionPolicy.rescueMethod(canDrawOverlays = false))
     }
 
     /** Silence must leave the rescue tap available briefly rather than removing it on the next tick. */
     @Test
     fun anOverlayStaysWhileTheSameHeartbeatRemainsLatest() {
         assertTrue(
-            AnchorSupervisionPolicy.overlayStillWanted(
+            SupervisionPolicy.overlayStillWanted(
                 nowMs = NOW,
                 shownAtMs = NOW - 30_000L,
                 lastHeartbeatMs = HEARTBEAT_AT_SHOW,
@@ -84,7 +84,7 @@ class AnchorSupervisionPolicyTest {
     @Test
     fun anOverlayGoesAwayWhenANewerHeartbeatArrives() {
         assertFalse(
-            AnchorSupervisionPolicy.overlayStillWanted(
+            SupervisionPolicy.overlayStillWanted(
                 nowMs = NOW,
                 shownAtMs = NOW - 15_000L,
                 lastHeartbeatMs = HEARTBEAT_AT_SHOW + 1L,
@@ -97,9 +97,9 @@ class AnchorSupervisionPolicyTest {
     @Test
     fun anOverlayIsDroppedAtItsTtl() {
         assertFalse(
-            AnchorSupervisionPolicy.overlayStillWanted(
+            SupervisionPolicy.overlayStillWanted(
                 nowMs = NOW,
-                shownAtMs = NOW - AnchorSupervisionPolicy.OVERLAY_TTL_MS,
+                shownAtMs = NOW - SupervisionPolicy.OVERLAY_TTL_MS,
                 lastHeartbeatMs = HEARTBEAT_AT_SHOW,
                 lastHeartbeatAtShowMs = HEARTBEAT_AT_SHOW
             )
@@ -110,7 +110,7 @@ class AnchorSupervisionPolicyTest {
     @Test
     fun anOverlayIsDroppedWhenTheClockMovesBehindItsRecords() {
         assertFalse(
-            AnchorSupervisionPolicy.overlayStillWanted(
+            SupervisionPolicy.overlayStillWanted(
                 nowMs = NOW,
                 shownAtMs = NOW + 1L,
                 lastHeartbeatMs = HEARTBEAT_AT_SHOW,
@@ -118,7 +118,7 @@ class AnchorSupervisionPolicyTest {
             )
         )
         assertFalse(
-            AnchorSupervisionPolicy.overlayStillWanted(
+            SupervisionPolicy.overlayStillWanted(
                 nowMs = NOW,
                 shownAtMs = NOW - 1L,
                 lastHeartbeatMs = NOW + 1L,
@@ -129,7 +129,7 @@ class AnchorSupervisionPolicyTest {
 
     @Test
     fun nothingIsRestartedBeforeAHeartbeatHasEverArrived() {
-        // The state the anchor is in the moment it is installed. "Termux is down" and "Termux was never
+        // The state the supervisor is in the moment it is installed. "Termux is down" and "Termux was never
         // installed, or never held the permission to report" are the same observation from here, and
         // acting on that would have a freshly installed anchor launch Termux on a phone whose owner has
         // not enabled anything yet.
@@ -191,12 +191,12 @@ class AnchorSupervisionPolicyTest {
 
     @Test
     fun theBackoffDoublesFromTheStaleThresholdAndRestsOnThirtyMinutes() {
-        assertEquals(45_000L, AnchorSupervisionPolicy.backoffMs(0))
-        assertEquals(90_000L, AnchorSupervisionPolicy.backoffMs(1))
-        assertEquals(180_000L, AnchorSupervisionPolicy.backoffMs(2))
-        assertEquals(360_000L, AnchorSupervisionPolicy.backoffMs(3))
-        assertEquals(1_800_000L, AnchorSupervisionPolicy.backoffMs(6))
-        assertEquals(1_800_000L, AnchorSupervisionPolicy.backoffMs(400))
+        assertEquals(45_000L, SupervisionPolicy.backoffMs(0))
+        assertEquals(90_000L, SupervisionPolicy.backoffMs(1))
+        assertEquals(180_000L, SupervisionPolicy.backoffMs(2))
+        assertEquals(360_000L, SupervisionPolicy.backoffMs(3))
+        assertEquals(1_800_000L, SupervisionPolicy.backoffMs(6))
+        assertEquals(1_800_000L, SupervisionPolicy.backoffMs(400))
     }
 
     @Test
@@ -229,7 +229,7 @@ class AnchorSupervisionPolicyTest {
     fun aHeartbeatAfterAStalePeriodReturnsToWaitingWhateverTheAttemptCount() {
         // Three unanswered attempts on the record and then the app reported again. The ladder is
         // measured from the heartbeat, so a fresh one answers every rung of it: this is the state in
-        // which the anchor must say nothing and do nothing, not the one in which it works out whether
+        // which the supervisor must say nothing and do nothing, not the one in which it works out whether
         // it is allowed to try again.
         val report = report(lastHeartbeatMs = secondsAgo(5), attempts = 3)
         assertEquals(WAIT, report.action)
@@ -257,7 +257,7 @@ class AnchorSupervisionPolicyTest {
     }
 
     @Test
-    fun anAnchorWithNoBootIdOfItsOwnDoesNotInventAReboot() {
+    fun anServerWithNoBootIdOfItsOwnDoesNotInventAReboot() {
         // Both sides read /proc/sys/kernel/random/boot_id, but a read can fail and return "unknown", and
         // two different failures of that read must not be read as "the device rebooted", which would
         // reset the ladder every tick and turn the backoff into a fifteen second retry loop.
@@ -297,7 +297,7 @@ class AnchorSupervisionPolicyTest {
 
     /**
      * The control for the rule above. Without it, "hold when the flag is set" could pass by holding always,
-     * and the anchor would quietly stop doing the one job it exists for.
+     * and the supervisor would quietly stop doing the one job it exists for.
      */
     @Test
     fun silenceWithoutTheGoodbyeFlagIsStillTreatedAsADeath() {
@@ -330,7 +330,7 @@ class AnchorSupervisionPolicyTest {
      */
     @Test
     fun anUnreadableBootIdInventsNoReboot() {
-        val unknown = AnchorSupervisionPolicy.UNKNOWN_BOOT_ID
+        val unknown = SupervisionPolicy.UNKNOWN_BOOT_ID
         assertEquals(RESTART, report(lastHeartbeatMs = secondsAgo(600), lastHeartbeatBootId = unknown).action)
     }
 
@@ -360,7 +360,7 @@ class AnchorSupervisionPolicyTest {
             report.retryAfterMs in (75L * 1000L)..(85L * 1000L)
         )
         assertTrue(
-            "the reason has to name the attempt as the anchor, not the heartbeat: ${report.reason}",
+            "the reason has to name the attempt as the supervisor, not the heartbeat: ${report.reason}",
             report.reason.contains("attempt itself")
         )
     }
@@ -387,6 +387,6 @@ class AnchorSupervisionPolicyTest {
             report.reason.contains("clock")
         )
         // The retry is one check interval, not the nonsense interval the arithmetic would suggest.
-        assertEquals(AnchorSupervisionPolicy.CHECK_INTERVAL_MS, report.retryAfterMs)
+        assertEquals(SupervisionPolicy.CHECK_INTERVAL_MS, report.retryAfterMs)
     }
 }
