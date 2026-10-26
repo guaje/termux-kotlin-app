@@ -1,6 +1,7 @@
 package com.termux.app.core.deviceapi.service
 
 import android.app.Notification
+import com.termux.app.UiEntryPoint
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -11,7 +12,6 @@ import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
-import com.termux.app.TermuxActivity
 import com.termux.app.core.api.DeviceApiError
 import com.termux.app.core.api.Result
 import com.termux.app.core.deviceapi.actions.BatteryAction
@@ -277,12 +277,7 @@ class DeviceApiService : Service() {
     }
 
     private fun createNotification(): Notification {
-        val pendingIntent = PendingIntent.getActivity(
-            this,
-            0,
-            Intent(this, TermuxActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE
-        )
+        val pendingIntent = UiEntryPoint.contentIntent(this, 0)
         val stopIntent = PendingIntent.getService(
             this,
             0,

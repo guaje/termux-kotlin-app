@@ -1030,10 +1030,16 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
         }
     }
 
-    /** Launch the TermuxActivity to bring it to foreground. */
+    /** Bring a terminal to the foreground, whichever app can show one. */
     private fun startTermuxActivity() {
+        // Checked first and not inferred from a failure: on this platform a background activity launch can be
+        // dropped without throwing at all (MEMORY.md §17), so "startActivity did not complain" is not evidence
+        // that anything appeared.
         if (PermissionUtils.validateDisplayOverOtherAppsPermissionForPostAndroid10(this, true)) {
-            TermuxActivity.startTermuxActivity(this)
+            if (!UiEntryPoint.openTerminal(this)) {
+                Logger.logError(LOG_TAG, "a session asked for a terminal and nothing is installed that can show " +
+                    "one: this build ships no terminal activity and no client package resolves")
+            }
         } else {
             val preferences = TermuxAppSharedPreferences.build(this) ?: return
             if (preferences.arePluginErrorNotificationsEnabled(false)) {
@@ -1077,9 +1083,12 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
     private fun buildNotification(): Notification? {
         val res = resources
 
-        // Set pending intent to be launched when notification is clicked
-        val notificationIntent = TermuxActivity.newInstance(this)
-        val contentIntent = PendingIntent.getActivity(this, 0, notificationIntent, PendingIntent.FLAG_IMMUTABLE)
+        // What a tap on this notification opens, answered by UiEntryPoint rather than by a class literal: while
+        // this app ships a terminal activity that is the activity, afterwards it is a client, and before either
+        // it is null. Null has to be a supported value here, because a headless server is exactly a foreground
+        // service with no UI of its own, and this file stops the service when the notification cannot be built -
+        // a throw on a missing activity would therefore take live sessions down with it.
+        val contentIntent = UiEntryPoint.contentIntent(this, 0)
 
         // Set notification text
         val sessionCount = termuxSessionsSize

@@ -10,8 +10,8 @@ import android.net.Uri
 import android.os.Build
 import android.widget.RemoteViews
 import com.termux.R
-import com.termux.app.TermuxActivity
 import com.termux.app.TermuxService
+import com.termux.app.UiEntryPoint
 import com.termux.shared.logger.Logger
 import com.termux.shared.shell.command.ExecutionCommand.Runner
 import com.termux.shared.termux.TermuxConstants.TERMUX_APP.TERMUX_SERVICE
@@ -95,10 +95,11 @@ class TermuxWidgetProvider : AppWidgetProvider() {
                 }
             }
             ACTION_OPEN_TERMUX -> {
-                val termuxIntent = Intent(context, TermuxActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                // A widget on the home screen is a user action from outside any task, so this is the one place
+                // the tap could legitimately start something - provided some app can show a terminal at all.
+                if (!UiEntryPoint.openTerminal(context)) {
+                    Logger.logWarn(LOG_TAG, "widget asked for a terminal and no installed package can show one")
                 }
-                context.startActivity(termuxIntent)
             }
         }
     }

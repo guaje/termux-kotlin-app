@@ -49,6 +49,7 @@
 ## [Unreleased]
 
 ### Changes
+- Seven call sites that opened a terminal now ask one resolver instead of naming `TermuxActivity` directly, so the day this app stops shipping a terminal activity is a change of route rather than seven ways to break. Covered by four tests over the resolver's ordering; the anchor's restart route now tries an explicit component before a launch intent.
 - The anchor leaves Termux closed when the user closed it, and after a reboot until the user opens it, and stops its own foreground service while waiting instead of keeping a notification up for somebody else's decision. `termux-anchor --restart never|enabled-only|always` puts the restart policy in the user's hands directly.
 - Host facts (`host.json`) are written when the terminal service starts, not only when something asks for them, so they describe the build actually installed. They had drifted to a build four days old, which the shipping gates survive but nothing else should have to.
 - The supervisor anchor (`Termux Anchor`) no longer appears in the app drawer, and is opened from inside Termux with the new `termux-anchor` command instead. Its activity is reachable only by a package holding `com.termux.anchor.permission.CONTROL`, i.e. one signed with the same release key. If Termux is broken the screen cannot be opened at all, and what is left is uninstalling the anchor from Settings - the price of hiding it, written down in the manifest.

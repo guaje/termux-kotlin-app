@@ -1,15 +1,14 @@
 package com.termux.app.boot
 
 import android.app.Notification
+import com.termux.app.UiEntryPoint
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
-import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import com.termux.R
-import com.termux.app.TermuxActivity
 import com.termux.shared.logger.Logger
 import com.termux.shared.termux.TermuxConstants
 import kotlinx.coroutines.*
@@ -237,10 +236,8 @@ class BootScriptExecutor @Inject constructor(
     private fun showProgressNotification(message: String) {
         createNotificationChannel()
         
-        val intent = Intent(context, TermuxActivity::class.java)
-        val pendingIntent = PendingIntent.getActivity(
-            context, 0, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        val pendingIntent = UiEntryPoint.contentIntent(
+            context, 0, PendingIntent.FLAG_UPDATE_CURRENT
         )
         
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
@@ -262,10 +259,8 @@ class BootScriptExecutor @Inject constructor(
     private fun showCompletionNotification(message: String, hasFailures: Boolean) {
         createNotificationChannel()
         
-        val intent = Intent(context, TermuxActivity::class.java)
-        val pendingIntent = PendingIntent.getActivity(
-            context, 0, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        val pendingIntent = UiEntryPoint.contentIntent(
+            context, 0, PendingIntent.FLAG_UPDATE_CURRENT
         )
         
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)

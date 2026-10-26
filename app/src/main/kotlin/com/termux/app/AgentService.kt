@@ -261,11 +261,8 @@ class AgentService : Service() {
     }
     
     private fun buildNotification(): Notification {
-        val notificationIntent = Intent(this, TermuxActivity::class.java)
-        val pendingIntent = PendingIntent.getActivity(
-            this, 0, notificationIntent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
+        // Null when no app can show a terminal; the notification stays useful without a tap target.
+        val pendingIntent = UiEntryPoint.contentIntent(this, 0, PendingIntent.FLAG_UPDATE_CURRENT)
         
         val stats = if (::agentDaemon.isInitialized) {
             agentDaemon.getStatistics()
