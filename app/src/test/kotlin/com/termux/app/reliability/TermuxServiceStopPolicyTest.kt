@@ -62,4 +62,35 @@ class TermuxServiceStopPolicyTest {
         restorationPending,
         tearingDown
     )
+
+    // ------------------------------------------------------------------ user exit versus death
+
+    /**
+     * The bug these four cover: closing Termux by typing `exit` in every session stopped the service
+     * through a different door than the drawer's Exit button, and only that second door told the
+     * supervisor that the user had closed the app. So the app was closed, the supervisor saw silence,
+     * read it as a crash, and brought it back.
+     */
+    @Test
+    fun aShellLeftOnPurposeIsTheUserClosingTheApp() {
+        assertTrue(TermuxServiceStopPolicy.countsAsUserClosingTheApp(false, 0))
+    }
+
+    @Test
+    fun theExitActionCountsEvenWithNoShellEverHavingExited() {
+        assertTrue(TermuxServiceStopPolicy.countsAsUserClosingTheApp(true, null))
+    }
+
+    /** A shell that died is not a user who left, and the rescue has to stay armed for it. */
+    @Test
+    fun aShellThatDiedIsNotSomebodyLeaving() {
+        assertFalse(TermuxServiceStopPolicy.countsAsUserClosingTheApp(false, 137))
+        assertFalse(TermuxServiceStopPolicy.countsAsUserClosingTheApp(false, 1))
+    }
+
+    /** Nothing ever ran, so nobody closed anything. */
+    @Test
+    fun aServiceThatStoppedWithoutEverRunningAShellIsNotAUserExit() {
+        assertFalse(TermuxServiceStopPolicy.countsAsUserClosingTheApp(false, null))
+    }
 }

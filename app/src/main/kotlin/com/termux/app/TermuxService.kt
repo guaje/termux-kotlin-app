@@ -100,6 +100,12 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
     /** If the user has executed the [TERMUX_SERVICE.ACTION_STOP_SERVICE] intent. */
     var mWantsToStop = false
 
+    /**
+     * The exit status of the most recently ended session, or null when none has ended in this instance.
+     * Consumed by [updateNotification] to decide whether stopping counts as a user exit.
+     */
+    private var lastSessionExitStatus: Int? = null
+
     /** If the service is currently tearing itself down in [onDestroy]. */
     private var mTearingDown = false
 
@@ -859,6 +865,11 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
             TermuxPluginUtils.processPluginExecutionCommandResult(this, LOG_TAG, executionCommand)
         }
 
+        // Recorded before the list shrinks, because this is the only moment the *reason* the last shell
+        // ended is knowable, and the supervisor's whole question is whether the user closed the app or it
+        // died. See [TermuxServiceStopPolicy.countsAsUserClosingTheApp].
+        lastSessionExitStatus = runCatching { termuxSession.terminalSession?.exitStatus }.getOrNull()
+
         mShellManager.mTermuxSessions.remove(termuxSession)
         snapshotSessions()
         mTermuxTerminalSessionActivityClient?.termuxSessionListNotifyUpdated()
@@ -1161,6 +1172,14 @@ class TermuxService : Service(), AppShell.AppShellClient, TermuxSession.TermuxSe
                 tearingDown = mTearingDown
             )
         ) {
+            // The other way this service ends. [actionStopService] is the drawer's Exit and marks the
+            // goodbye itself; this branch is every session having been exited one by one, which is how
+            // the app is usually actually closed and which used to leave the supervisor with nothing but
+            // silence. Silence reads as a crash to a supervisor, and it brought the app straight back.
+            if (TermuxServiceStopPolicy.countsAsUserClosingTheApp(mWantsToStop, lastSessionExitStatus)) {
+                Logger.logDebug(LOG_TAG, "the last shell exited cleanly; telling the supervisor this was the user")
+                anchorHeartbeat?.markStoppedByUser()
+            }
             requestStopService()
         } else {
             if (PermissionUtils.checkNotificationPermission(this)) {
