@@ -288,10 +288,10 @@ class TermuxCrashUtils private constructor(private val mType: TYPE) : CrashHandl
 
             val contentIntent = PendingIntent.getActivity(
                 termuxPackageContext, nextNotificationId, result.contentIntent, PendingIntent.FLAG_UPDATE_CURRENT
-            )
+             or PendingIntent.FLAG_IMMUTABLE)
 
             val deleteIntent = result.deleteIntent?.let {
-                PendingIntent.getBroadcast(termuxPackageContext, nextNotificationId, it, PendingIntent.FLAG_UPDATE_CURRENT)
+                PendingIntent.getBroadcast(termuxPackageContext, nextNotificationId, it, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
             }
 
             setupCrashReportsNotificationChannel(termuxPackageContext)

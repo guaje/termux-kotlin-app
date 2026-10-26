@@ -196,7 +196,7 @@ class DevKitShipCoordinator(private val context: Context) {
         var flags = PendingIntent.FLAG_UPDATE_CURRENT
         // Below API 31 mutability is not a flag to set: an unspecified PendingIntent is mutable already.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) flags = flags or PendingIntent.FLAG_MUTABLE
-        return PendingIntent.getBroadcast(context, REQUEST_CODE, intent, flags)
+        return PendingIntent.getBroadcast(context, REQUEST_CODE, intent, flags or PendingIntent.FLAG_IMMUTABLE)
     }
 
     /** What the running app actually is, straight from the package manager. */
